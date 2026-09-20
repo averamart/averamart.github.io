@@ -1,0 +1,13 @@
+{
+  "name": "Avera Mart — বিজনেস ম্যানেজার",
+  "short_name": "Avera Mart",
+  "start_url": "index.html",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#F7F5EF",
+  "theme_color": "#123C69",
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
