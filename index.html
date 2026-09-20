@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Avera Mart — বিজনেস ম্যানেজার</title>
+<link rel="icon" href="assets/logo.jpg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Tiro+Bangla&family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ================= LOGIN SCREEN ================= -->
+<div id="loginScreen" class="login-screen">
+  <div class="login-card">
+    <img src="assets/logo.jpg" alt="Avera Mart" class="login-logo">
+    <h1>Avera Mart</h1>
+    <p class="tagline">প্রকৃতির ছোঁয়া, নিরাপদ আস্থা</p>
+
+    <div id="loginFormWrap">
+      <div class="field-group">
+        <label>আপনার রোল নির্বাচন করুন</label>
+        <select id="loginRole">
+          <option value="admin">অ্যাডমিন (Admin)</option>
+          <option value="manager">ম্যানেজার (Manager)</option>
+          <option value="delivery">ডেলিভারি ম্যান (Delivery Man)</option>
+        </select>
+      </div>
+      <div class="field-group">
+        <label>পিন (PIN)</label>
+        <input type="password" id="loginPin" placeholder="৪ সংখ্যার পিন দিন" inputmode="numeric" maxlength="6">
+      </div>
+      <button class="btn btn-primary btn-block" onclick="handleLogin()">প্রবেশ করুন</button>
+    </div>
+    <p id="loginError" class="error-text"></p>
+    <p id="loginStatus" class="hint-text">☁️ ক্লাউড ডেটাবেজের সাথে সংযোগ করা হচ্ছে...</p>
+  </div>
+</div>
+
+<!-- ================= APP SHELL ================= -->
+<div id="appShell" class="app-shell hidden">
+
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <img src="assets/logo.jpg" alt="logo">
+      <div>
+        <div class="brand-name">Avera Mart</div>
+        <div class="brand-tag">প্রকৃতির ছোঁয়া, নিরাপদ আস্থা</div>
+      </div>
+    </div>
+    <nav id="sideNav" class="side-nav"></nav>
+    <div class="sidebar-footer">
+      <div id="sessionInfo" class="session-info"></div>
+      <button class="btn btn-ghost btn-block" onclick="handleLogout()">লগ-আউট</button>
+    </div>
+  </aside>
+
+  <main class="main-area">
+    <header class="top-bar">
+      <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
+      <h2 id="pageTitle">ড্যাশবোর্ড</h2>
+    </header>
+    <div id="pageContent" class="page-content"></div>
+  </main>
+</div>
+
+<!-- print-only invoice container -->
+<div id="printArea" class="print-area"></div>
+
+<!-- Firebase (compat SDK — no build step needed) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
