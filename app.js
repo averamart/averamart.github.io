@@ -268,6 +268,12 @@ function boot(){
 }
 document.addEventListener('DOMContentLoaded', () => { initFirebase(); boot(); });
 
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* installability is a bonus, never block the app on it */ });
+  });
+}
+
 /* ============================================================
    DASHBOARD
    ============================================================ */
