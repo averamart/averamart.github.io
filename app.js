@@ -349,8 +349,16 @@ function renderProducts(){
     <div class="panel">
       <div class="panel-head">
         <h3>পণ্য তালিকা</h3>
-        <button class="btn btn-accent btn-sm" onclick="openProductForm()">+ নতুন পণ্য</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          ${isAdmin ? `
+            <button class="btn btn-outline btn-sm" onclick="downloadProductDemoExcel()">📥 ডেমো এক্সেল ফাইল</button>
+            <button class="btn btn-outline btn-sm" onclick="document.getElementById('excelFileInput').click()">📤 এক্সেল থেকে আপলোড</button>
+            <input type="file" id="excelFileInput" accept=".xlsx,.xls" class="hidden" onchange="handleExcelUpload(event)">
+          ` : ''}
+          <button class="btn btn-accent btn-sm" onclick="openProductForm()">+ নতুন পণ্য</button>
+        </div>
       </div>
+      ${isAdmin ? `<p style="font-size:12px;color:var(--text-muted);margin:-4px 0 14px;">প্রথমে "ডেমো এক্সেল ফাইল" ডাউনলোড করে সেখানে পণ্যের তথ্য পূরণ করুন, তারপর "এক্সেল থেকে আপলোড" দিয়ে সেই ফাইলটা সিলেক্ট করুন — সব পণ্য একসাথে যোগ হয়ে যাবে।</p>` : ''}
       <div class="table-wrap"><table><thead><tr>
         <th>আইডি</th><th>পণ্যের নাম</th><th>ক্যাটাগরি</th>
         ${isAdmin?'<th>ক্রয়মূল্য</th>':''}
@@ -359,6 +367,66 @@ function renderProducts(){
     </div>
     <div id="modalHolder"></div>
   `;
+}
+
+function downloadProductDemoExcel(){
+  const headers = ['পণ্যের নাম','ক্যাটাগরি','ক্রয়মূল্য','খুচরা মূল্য','শেয়ারহোল্ডার মূল্য','স্টক','ন্যূনতম স্টক সতর্কতা'];
+  const example = ['প্রিমিয়াম মিনিকেট চাল (৫ কেজি)','খাদ্যশস্য',340,390,365,40,10];
+  const ws = XLSX.utils.aoa_to_sheet([headers, example]);
+  ws['!cols'] = [{wch:30},{wch:16},{wch:12},{wch:12},{wch:16},{wch:10},{wch:16}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'পণ্য তালিকা');
+  XLSX.writeFile(wb, 'avera-mart-product-demo.xlsx');
+}
+
+function handleExcelUpload(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try{
+      const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, {defval:''});
+
+      const products = CACHE.products.slice();
+      const settings = {...CACHE.settings};
+      const newCategories = [];
+      let added = 0, skipped = 0;
+
+      rows.forEach(row => {
+        const name = String(row['পণ্যের নাম']||'').trim();
+        if(!name){ skipped++; return; }
+        let category = String(row['ক্যাটাগরি']||'').trim() || 'অন্যান্য';
+        if(!settings.productCategories.includes(category) && !newCategories.includes(category)){
+          newCategories.push(category);
+        }
+        products.push({
+          id: genId('P', products),
+          name,
+          category,
+          cost: Number(row['ক্রয়মূল্য']||0),
+          retail: Number(row['খুচরা মূল্য']||0),
+          shareholder: Number(row['শেয়ারহোল্ডার মূল্য']||0),
+          stock: Number(row['স্টক']||0),
+          minStock: Number(row['ন্যূনতম স্টক সতর্কতা']||5)
+        });
+        added++;
+      });
+
+      if(added===0){ alert('ফাইলে কোনো বৈধ পণ্যের সারি পাওয়া যায়নি। ডেমো ফাইলের ফরম্যাট অনুযায়ী কলামের নাম ঠিক আছে কিনা যাচাই করুন।'); return; }
+
+      if(newCategories.length){ settings.productCategories = [...settings.productCategories, ...newCategories]; }
+      saveCollection('products', products);
+      if(newCategories.length) saveSettings(settings);
+      renderProducts();
+      alert(`✅ ${added}টি পণ্য সফলভাবে যোগ হয়েছে।${skipped?` (${skipped}টি সারি খালি থাকায় বাদ দেওয়া হয়েছে)`:''}`);
+    }catch(err){
+      alert('ফাইলটি পড়া যায়নি। এটা ঠিক .xlsx ফরম্যাটের ফাইল কিনা এবং ডেমো ফাইলের কলাম কাঠামো ঠিক আছে কিনা যাচাই করুন।');
+    }
+    event.target.value = '';
+  };
+  reader.readAsArrayBuffer(file);
 }
 
 function openProductForm(id){
