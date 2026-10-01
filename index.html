@@ -2,7 +2,11 @@
 <html lang="bn">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Avera Mart">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>Avera Mart — বিজনেস ম্যানেজার</title>
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -37,6 +41,8 @@
       <button class="btn btn-primary btn-block" onclick="handleLogin()">প্রবেশ করুন</button>
     </div>
     <p id="loginError" class="error-text"></p>
+    <button id="installBtnLogin" class="btn btn-outline btn-block install-btn hidden" onclick="installApp()">📲 অ্যাপ হিসেবে ইনস্টল করুন</button>
+    <p id="iosHint" class="hint-text hidden">iPhone/iPad-এ: Safari-র শেয়ার (⬆️) বাটন চেপে "Add to Home Screen" বেছে নিন।</p>
     <p id="loginStatus" class="hint-text">☁️ ক্লাউড ডেটাবেজের সাথে সংযোগ করা হচ্ছে...</p>
   </div>
 </div>
@@ -44,6 +50,7 @@
 <!-- ================= APP SHELL ================= -->
 <div id="appShell" class="app-shell hidden">
 
+  <div id="sidebarBackdrop" class="sidebar-backdrop" onclick="toggleSidebar()"></div>
   <aside class="sidebar">
     <div class="sidebar-brand">
       <img src="logo.jpg" alt="logo">
@@ -55,6 +62,7 @@
     <nav id="sideNav" class="side-nav"></nav>
     <div class="sidebar-footer">
       <div id="sessionInfo" class="session-info"></div>
+      <button id="installBtnSide" class="btn btn-ghost btn-block install-btn hidden" onclick="installApp()" style="margin-bottom:8px;">📲 অ্যাপ ইনস্টল করুন</button>
       <button class="btn btn-ghost btn-block" onclick="handleLogout()">লগ-আউট</button>
     </div>
   </aside>

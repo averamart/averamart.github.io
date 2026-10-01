@@ -241,3 +241,37 @@ tr:hover td{background:#FAFAF5;}
 .stock-print .sp-total td{background:#e8eef7;font-weight:700;font-size:13px;}
 .stock-print .sp-blank{width:12%;}
 @media print{ img{-webkit-print-color-adjust:exact;print-color-adjust:exact;} .invoice-head img{display:block !important;} }
+
+/* ===== device-friendly layout (phone / tablet / PC) + installed-app polish ===== */
+html{-webkit-text-size-adjust:100%;}
+body{-webkit-tap-highlight-color:transparent;overflow-x:hidden;}
+img{max-width:100%;}
+.login-screen{min-height:100vh;min-height:100dvh;padding-top:max(20px,env(safe-area-inset-top));padding-bottom:max(20px,env(safe-area-inset-bottom));}
+.top-bar{padding-top:max(14px,env(safe-area-inset-top));}
+.sidebar{padding-top:calc(20px + env(safe-area-inset-top, 0px));padding-bottom:calc(20px + env(safe-area-inset-bottom, 0px));height:100vh;height:100dvh;}
+.page-content{padding-bottom:max(24px,env(safe-area-inset-bottom));}
+.install-btn{margin-top:12px;}
+.sidebar-backdrop{display:none;position:fixed;inset:0;background:rgba(10,20,35,.45);z-index:15;}
+.sidebar-backdrop.show{display:block;}
+.table-wrap{-webkit-overflow-scrolling:touch;}
+.table-wrap table{min-width:560px;}
+.invoice-box{max-width:100%;}
+@media(min-width:861px){ .sidebar-backdrop{display:none !important;} }
+@media(max-width:860px){
+  .sidebar{width:min(280px,82vw);}
+  .page-content{padding:14px;}
+  .top-bar{padding-left:14px;padding-right:14px;}
+  input,select,textarea{font-size:16px !important;}           /* stops iPhone auto-zoom */
+  .btn,.icon-btn,.nav-item,.menu-toggle{min-height:42px;}
+  .panel-head{flex-wrap:wrap;gap:8px;}
+  .panel{padding:14px;}
+  .login-card{padding:28px 20px;}
+}
+@media(max-width:480px){
+  body{font-size:14.5px;}
+  .stat-card{padding:14px;}
+  .invoice-actions .btn{flex:1 1 45%;}
+}
+@media(min-width:1400px){ .page-content{max-width:1320px;} }
+@media (display-mode: standalone){ body{overscroll-behavior-y:contain;} }
+@media print{ .sidebar-backdrop{display:none !important;} .table-wrap table{min-width:0;} }

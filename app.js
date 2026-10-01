@@ -178,6 +178,7 @@ function fmtStock(stock, p){
   const unit = (p && p.unit) || 'কেজি';
   const info = subInfo(p);
   const st = Number(stock||0);
+  if(st < 0) return '-' + fmtStock(-st, p);
   if(!info || info.pack) return `${r3(st)} ${unit}`;
   const whole = Math.floor(st + 1e-9);
   const rem = Math.round((st - whole) * info.factor);
@@ -256,7 +257,10 @@ const NAV_ITEMS = [
 
 let currentPage = 'dashboard';
 
-function toggleSidebar(){ document.querySelector('.sidebar').classList.toggle('open'); }
+function toggleSidebar(){
+  const open = document.querySelector('.sidebar').classList.toggle('open');
+  document.getElementById('sidebarBackdrop').classList.toggle('show', open);
+}
 
 function renderNav(){
   const session = getSession();
@@ -278,6 +282,7 @@ function go(page){
   currentPage = page;
   renderNav();
   document.querySelector('.sidebar').classList.remove('open');
+  document.getElementById('sidebarBackdrop').classList.remove('show');
   const titles = Object.fromEntries(NAV_ITEMS.map(i=>[i.key,i.label]));
   document.getElementById('pageTitle').textContent = titles[page] || '';
   const renderers = {
@@ -1869,3 +1874,30 @@ function restoreBackup(event){
   };
   reader.readAsText(file);
 }
+
+
+/* ============================================================
+   INSTALL AS APP (PWA)
+   ============================================================ */
+let DEFERRED_INSTALL = null;
+const isStandalone = () => window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+function setInstallButtons(show){
+  ['installBtnLogin','installBtnSide'].forEach(id => { const b = document.getElementById(id); if(b) b.classList.toggle('hidden', !show); });
+}
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  DEFERRED_INSTALL = e;
+  if(!isStandalone()) setInstallButtons(true);
+});
+window.addEventListener('appinstalled', () => { DEFERRED_INSTALL = null; setInstallButtons(false); });
+async function installApp(){
+  if(!DEFERRED_INSTALL){ alert('ব্রাউজারের মেনু (⋮) থেকে "Install app" বা "Add to Home screen" বেছে নিন।'); return; }
+  DEFERRED_INSTALL.prompt();
+  await DEFERRED_INSTALL.userChoice;
+  DEFERRED_INSTALL = null;
+  setInstallButtons(false);
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  if(isIOS && !isStandalone()){ const h = document.getElementById('iosHint'); if(h) h.classList.remove('hidden'); }
+});
