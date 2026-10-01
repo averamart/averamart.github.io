@@ -43,6 +43,7 @@
     <p id="loginError" class="error-text"></p>
     <button id="installBtnLogin" class="btn btn-outline btn-block install-btn hidden" onclick="installApp()">📲 অ্যাপ হিসেবে ইনস্টল করুন</button>
     <p id="iosHint" class="hint-text hidden">iPhone/iPad-এ: Safari-র শেয়ার (⬆️) বাটন চেপে "Add to Home Screen" বেছে নিন।</p>
+    <p id="appVersionLogin" class="hint-text" style="margin-top:10px;"></p>
     <p id="loginStatus" class="hint-text">☁️ ক্লাউড ডেটাবেজের সাথে সংযোগ করা হচ্ছে...</p>
   </div>
 </div>
@@ -62,6 +63,8 @@
     <nav id="sideNav" class="side-nav"></nav>
     <div class="sidebar-footer">
       <div id="sessionInfo" class="session-info"></div>
+      <div id="appVersionSide" class="session-info" style="opacity:.85;"></div>
+      <button class="btn btn-ghost btn-block" onclick="forceRefreshApp()" style="margin-bottom:8px;font-size:13px;">🔄 নতুন সংস্করণ লোড করুন</button>
       <button id="installBtnSide" class="btn btn-ghost btn-block install-btn hidden" onclick="installApp()" style="margin-bottom:8px;">📲 অ্যাপ ইনস্টল করুন</button>
       <button class="btn btn-ghost btn-block" onclick="handleLogout()">লগ-আউট</button>
     </div>

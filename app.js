@@ -150,18 +150,25 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&am
 /* An order can hold multiple product line items. Older orders saved before this
    feature only had a single productId/qty/unitPrice — this normalizes both shapes. */
 function r3(n){ return Math.round(Number(n||0)*1000)/1000; }
+const UNIT_FAMILY = {
+  'কেজি': {label:'গ্রাম', factor:1000},
+  'লিটার': {label:'মি.লি.', factor:1000},
+  'ডজন': {label:'পিস', factor:12},
+  'হালি': {label:'পিস', factor:4},
+  'গ্রাম': {label:'কেজি', factor:0.001},
+  'মিলিলিটার': {label:'লিটার', factor:0.001}
+};
 function subInfo(p){
   if(!p) return null;
   if(Number(p.packSize)>0) return {label: p.packLabel || 'গ্রাম', factor: Number(p.packSize), pack:true};
-  if(p.unit==='কেজি') return {label:'গ্রাম', factor:1000};
-  if(p.unit==='লিটার') return {label:'মি.লি.', factor:1000};
-  return null;
+  const f = UNIT_FAMILY[p.unit];
+  return f ? {...f} : null;
 }
 function fmtQty(qty, p){
   const unit = (p && p.unit) || 'কেজি';
   const info = subInfo(p || {unit});
   const q = Number(qty);
-  if(info && q > 0 && q < 1) return `${r3(q*info.factor)} ${info.label}`;
+  if(info && info.factor > 1 && q > 0 && q < 1) return `${r3(q*info.factor)} ${info.label}`;
   if(info && info.pack && q > 1 && Math.abs(q - Math.round(q)) > 0.0001) return `${r3(q)} ${unit} (${r3(q*info.factor)} ${info.label})`;
   return `${r3(q)} ${unit}`;
 }
@@ -179,7 +186,7 @@ function fmtStock(stock, p){
   const info = subInfo(p);
   const st = Number(stock||0);
   if(st < 0) return '-' + fmtStock(-st, p);
-  if(!info || info.pack) return `${r3(st)} ${unit}`;
+  if(!info || info.pack || info.factor <= 1) return `${r3(st)} ${unit}`;
   const whole = Math.floor(st + 1e-9);
   const rem = Math.round((st - whole) * info.factor);
   if(whole===0 && rem===0) return `0 ${unit}`;
@@ -514,7 +521,7 @@ function openProductForm(id){
   const products = CACHE.products;
   const p = id ? products.find(x=>x.id===id) : null;
   const isAdmin = getSession().role==='admin';
-  const UNIT_OPTIONS = ['কেজি','গ্রাম','লিটার','মিলিলিটার','পিস','ডজন','প্যাকেট','বস্তা'];
+  const UNIT_OPTIONS = ['কেজি','গ্রাম','লিটার','মিলিলিটার','পিস','ডজন','হালি','প্যাকেট','বস্তা'];
   const html = `
     <div class="panel">
       <h3>${p?'পণ্য সম্পাদনা':'নতুন পণ্য যোগ করুন'}</h3>
@@ -1901,3 +1908,34 @@ document.addEventListener('DOMContentLoaded', () => {
   const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
   if(isIOS && !isStandalone()){ const h = document.getElementById('iosHint'); if(h) h.classList.remove('hidden'); }
 });
+
+
+/* ============================================================
+   APP VERSION / LAST UPDATED
+   ============================================================ */
+const APP_VERSION = '২.০';
+const APP_UPDATED_FALLBACK = '2026-10-01T12:00:00+06:00';
+function fmtUpdated(d){
+  try{
+    return new Intl.DateTimeFormat('bn-BD', {timeZone:'Asia/Dhaka', day:'numeric', month:'long', year:'numeric', hour:'numeric', minute:'2-digit', hour12:true}).format(d);
+  }catch(e){ return d.toLocaleString(); }
+}
+async function showAppVersion(){
+  let when = new Date(APP_UPDATED_FALLBACK);
+  try{
+    const res = await fetch('app.js', {method:'HEAD', cache:'no-store'});
+    const lm = res.headers.get('Last-Modified');
+    if(lm && !isNaN(new Date(lm))) when = new Date(lm);   // real publish time of the deployed file
+  }catch(e){ /* offline: show the built-in date */ }
+  const text = `সংস্করণ ${APP_VERSION} · সর্বশেষ আপডেট: ${fmtUpdated(when)}`;
+  ['appVersionLogin','appVersionSide'].forEach(id => { const el = document.getElementById(id); if(el) el.textContent = text; });
+}
+async function forceRefreshApp(){
+  if(!confirm('অ্যাপের সর্বশেষ সংস্করণ লোড করা হবে। চালিয়ে যাবেন?')) return;
+  try{
+    if('serviceWorker' in navigator){ const regs = await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r=>r.unregister())); }
+    if(window.caches){ const keys = await caches.keys(); await Promise.all(keys.map(k=>caches.delete(k))); }
+  }catch(e){}
+  location.reload();
+}
+document.addEventListener('DOMContentLoaded', showAppVersion);
