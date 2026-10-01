@@ -179,6 +179,24 @@ function parsePackUnit(unit){
   if(u==='পিস' || u==='pcs')                       return {label:'পিস', factor:n, pack:true};
   return {label:'মি.লি.', factor:n, pack:true};
 }
+// every unit the seller may pick for a product; factor = how many of that unit make ONE base unit
+function unitOptions(p){
+  const base = {key:'base', label:(p&&p.unit)||'কেজি', factor:1};
+  const info = subInfo(p);
+  if(!info) return [base];
+  const opts = [base, {key:'sub', label:info.label, factor:info.factor}];
+  if(info.pack){
+    if(info.label==='গ্রাম') opts.push({key:'big', label:'কেজি', factor:info.factor/1000});
+    else if(info.label==='মি.লি.') opts.push({key:'big', label:'লিটার', factor:info.factor/1000});
+  }
+  return opts;
+}
+function optByKey(p,key){ const o = unitOptions(p); return o.find(x=>x.key===key) || o[0]; }
+function unitSelectHtml(p, selectedKey, attrs){
+  const o = unitOptions(p);
+  if(o.length<2) return `<span class="muted-cell">${esc(o[0].label)}</span>`;
+  return `<select ${attrs} style="padding:4px;border:1px solid var(--border);border-radius:6px;">${o.map(x=>`<option value="${x.key}" ${x.key===selectedKey?'selected':''}>${esc(x.label)}</option>`).join('')}</select>`;
+}
 function fmtQty(qty, p){
   const unit = (p && p.unit) || 'কেজি';
   const info = subInfo(p || {unit});
@@ -192,8 +210,8 @@ function lineAmt(it){ return Math.round(Number(it.qty)*Number(it.unitPrice)*100)
 function fmtItem(it, p){ return (it.dq!=null && it.du) ? `${it.dq} ${it.du}` : fmtQty(it.qty, p); }
 function syncDisp(it, p){
   if(it.du==null) return;
-  const info = subInfo(p);
-  it.dq = (info && it.du===info.label) ? r3(it.qty*info.factor) : r3(it.qty);
+  const o = unitOptions(p).find(x=>x.label===it.du);
+  it.dq = r3(it.qty*(o?o.factor:1));
 }
 // stock shown like "২ কেজি ৩৫০ গ্রাম" instead of a decimal
 function fmtStock(stock, p){
@@ -683,8 +701,9 @@ function openOrderForm(id){
   const orders = CACHE.orders;
   const o = id ? orders.find(x=>x.id===id) : null;
   ORDER_CART = o ? orderItems(o).map(it=>{
-    const p = CACHE.products.find(x=>x.id===it.productId), info = subInfo(p);
-    return {...it, sub: !!(info && it.du===info.label)};
+    const p = CACHE.products.find(x=>x.id===it.productId);
+    const m = unitOptions(p).find(o=>o.label===it.du);
+    return {...it, mode: m ? m.key : 'base'};
   }) : [];
 
   const html = `
@@ -772,14 +791,14 @@ function updateCartQty(productId, qty){
   const it = ORDER_CART.find(x=>x.productId===productId);
   if(it){
     const v = Number(qty)||0;
-    const f = (subInfo(CACHE.products.find(x=>x.id===productId))||{factor:1000}).factor;
-    it.qty = Math.max(0.001, it.sub ? v/f : v) || 1;
+    const o = optByKey(CACHE.products.find(x=>x.id===productId), it.mode);
+    it.qty = Math.max(0.001, v/o.factor) || 1;
   }
   renderCart();
 }
-function setCartUnitMode(productId, sub){
+function setCartUnitMode(productId, mode){
   const it = ORDER_CART.find(x=>x.productId===productId);
-  if(it){ it.sub = !!sub; }
+  if(it){ it.mode = mode; }
   renderCart();
 }
 function removeFromCart(productId){
@@ -826,10 +845,10 @@ function renderCart(){
     return `
       <tr>
         <td>${esc(p?p.name:'—')}</td>
-        <td class="cell-center"><input type="number" min="0.001" step="any" value="${it.sub ? r3(it.qty*(subInfo(p)||{factor:1000}).factor) : r3(it.qty)}" style="width:75px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartQty('${it.productId}', this.value)">
-          ${subInfo(p) ? `<select onchange="setCartUnitMode('${it.productId}', this.value==='sub')" style="padding:4px;border:1px solid var(--border);border-radius:6px;"><option value="base" ${it.sub?'':'selected'}>${esc(p?.unit||'কেজি')}</option><option value="sub" ${it.sub?'selected':''}>${subInfo(p).label}</option></select>` : `<span class="muted-cell">${esc(p?.unit||'কেজি')}</span>`}</td>
+        <td class="cell-center"><input type="number" min="0.001" step="any" value="${r3(it.qty*optByKey(p,it.mode).factor)}" style="width:75px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartQty('${it.productId}', this.value)">
+          ${unitSelectHtml(p, it.mode||'base', `onchange="setCartUnitMode('${it.productId}', this.value)"`)}</td>
         <td class="cell-center"><input type="number" min="0" value="${it.unitPrice}" style="width:80px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartPrice('${it.productId}', this.value)"></td>
-        <td class="cell-num">${money(lineTotal)}<br><span class="muted-cell">${it.sub&&subInfo(p) ? r3(it.qty*subInfo(p).factor)+' '+subInfo(p).label : r3(it.qty)+' '+esc(p?.unit||'কেজি')} × ${money(it.unitPrice)}/${esc(p?.unit||'কেজি')}</span></td>
+        <td class="cell-num">${money(lineTotal)}<br><span class="muted-cell">${r3(it.qty*optByKey(p,it.mode).factor)} ${esc(optByKey(p,it.mode).label)} × ${money(it.unitPrice)}/${esc(p?.unit||'কেজি')}</span></td>
         <td class="cell-center"><button class="icon-btn danger" onclick="removeFromCart('${it.productId}')">🗑️</button></td>
       </tr>`;
   }).join('');
@@ -860,10 +879,9 @@ function saveOrder(id){
     address: document.getElementById('o_addr').value.trim(),
     items: ORDER_CART.map(it=>{
       const p = CACHE.products.find(x=>x.id===it.productId);
-      const info = subInfo(p);
-      const useSub = !!(it.sub && info);
+      const o = optByKey(p, it.mode);
       return {productId:it.productId, qty:Number(it.qty), unitPrice:Number(it.unitPrice), standardPrice:Number(it.standardPrice!=null?it.standardPrice:it.unitPrice),
-        dq: useSub ? r3(Number(it.qty)*info.factor) : r3(Number(it.qty)), du: useSub ? info.label : ((p&&p.unit)||'কেজি')};
+        dq: r3(Number(it.qty)*o.factor), du: o.label};
     }),
     discount,
     total: Math.max(0, subtotal + deliveryCharge - discount),
@@ -974,9 +992,9 @@ function openPurchaseForm(){
 }
 function refreshPurchaseUnit(){
   const p = CACHE.products.find(x=>x.id===document.getElementById('pu_product').value);
-  const info = subInfo(p), sel = document.getElementById('pu_qunit');
+  const sel = document.getElementById('pu_qunit');
   if(!sel) return;
-  sel.innerHTML = `<option value="base">${esc((p&&p.unit)||'কেজি')}</option>` + (info ? `<option value="sub">${info.label}</option>` : '');
+  sel.innerHTML = unitOptions(p).map(o=>`<option value="${o.key}">${esc(o.label)}</option>`).join('');
 }
 function calcPurchaseQty(){
   const bags = Number(document.getElementById('pu_bags').value||0);
@@ -996,7 +1014,7 @@ function savePurchase(){
   const productId = document.getElementById('pu_product').value;
   const pSel = products.find(x=>x.id===productId);
   const info = subInfo(pSel);
-  const div = (document.getElementById('pu_qunit').value==='sub' && info) ? info.factor : 1;
+  const div = optByKey(pSel, document.getElementById('pu_qunit').value).factor;
   const qty = r3(Number(document.getElementById('pu_qty').value||0)/div);
   const freeQty = r3(Number(document.getElementById('pu_freeqty').value||0)/div);
   if(!supplier || qty<=0){ alert('সরবরাহকারীর নাম ও পরিমাণ সঠিকভাবে দিন'); return; }
@@ -1210,7 +1228,7 @@ function loadReturnOrder(){
       <td class="cell-center">${fmtItem(it,p)}</td>
       <td class="cell-num">${money(it.unitPrice)}</td>
       <td class="cell-center"><input type="number" min="0" step="any" value="0" id="ret_qty_${idx}" style="width:80px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;">
-        ${subInfo(p) ? `<select id="ret_unit_${idx}" style="padding:4px;border:1px solid var(--border);border-radius:6px;"><option value="base" ${it.du===subInfo(p).label?'':'selected'}>${esc(p.unit||'কেজি')}</option><option value="sub" ${it.du===subInfo(p).label?'selected':''}>${subInfo(p).label}</option></select>` : `<span class="muted-cell">${esc((p&&p.unit)||'কেজি')}</span>`}</td>
+        ${unitSelectHtml(p, (unitOptions(p).find(o=>o.label===it.du)||{key:'base'}).key, `id="ret_unit_${idx}"`)}</td>
     </tr>`;
   }).join('');
   holder.innerHTML = `
@@ -1241,11 +1259,10 @@ function submitReturn(orderId){
   items.forEach((it, i)=>{
     const field = document.getElementById(`ret_qty_${i}`);
     const pRet = products.find(x=>x.id===it.productId);
-    const infoRet = subInfo(pRet);
     const unitSel = document.getElementById(`ret_unit_${i}`);
-    const useSub = !!(unitSel && unitSel.value==='sub' && infoRet);
+    const oRet = optByKey(pRet, unitSel ? unitSel.value : 'base');
     const typed = field ? Number(field.value||0) : 0;
-    const retQty = r3(useSub ? typed/infoRet.factor : typed);
+    const retQty = r3(typed/oRet.factor);
     if(retQty > Number(it.qty) + 0.0005){ overLimit = true; return; }
     if(retQty>0){
       anyReturned = true;
@@ -1254,7 +1271,7 @@ function submitReturn(orderId){
         id: genId('RET-', returns.concat(newEntries)),
         date: pickedDate('ret_date'), orderId: order.id, customerName: order.customerName,
         productId: it.productId, qty: retQty, refundAmount: Math.round(refundAmount*100)/100, reason,
-        dq: r3(typed), du: useSub ? infoRet.label : ((pRet&&pRet.unit)||'কেজি')
+        dq: r3(typed), du: oRet.label
       });
       it.qty = r3(Number(it.qty) - retQty);
       syncDisp(it, products.find(x=>x.id===it.productId));
@@ -1928,7 +1945,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '২.০';
+const APP_VERSION = '২.১';
 const APP_UPDATED_FALLBACK = '2026-10-01T12:00:00+06:00';
 function fmtUpdated(d){
   try{
