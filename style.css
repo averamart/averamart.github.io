@@ -236,3 +236,8 @@ tr:hover td{background:#FAFAF5;}
 .invoice-sign > div{flex:1;}
 .invoice-sign .sign-line{display:block;border-top:1px solid #333;margin-bottom:4px;}
 .thermal .invoice-sign{margin-top:34px;gap:12px;font-size:10.5px;}
+
+.stock-print .sp-sub td{background:#fafafa;font-weight:600;}
+.stock-print .sp-total td{background:#e8eef7;font-weight:700;font-size:13px;}
+.stock-print .sp-blank{width:12%;}
+@media print{ img{-webkit-print-color-adjust:exact;print-color-adjust:exact;} .invoice-head img{display:block !important;} }

@@ -165,6 +165,26 @@ function fmtQty(qty, p){
   if(info && info.pack && q > 1 && Math.abs(q - Math.round(q)) > 0.0001) return `${r3(q)} ${unit} (${r3(q*info.factor)} ${info.label})`;
   return `${r3(q)} ${unit}`;
 }
+function lineAmt(it){ return Math.round(Number(it.qty)*Number(it.unitPrice)*100)/100; }
+// what the customer sees: exactly the unit the seller picked (e.g. "10 গ্রাম", "2 কেজি")
+function fmtItem(it, p){ return (it.dq!=null && it.du) ? `${it.dq} ${it.du}` : fmtQty(it.qty, p); }
+function syncDisp(it, p){
+  if(it.du==null) return;
+  const info = subInfo(p);
+  it.dq = (info && it.du===info.label) ? r3(it.qty*info.factor) : r3(it.qty);
+}
+// stock shown like "২ কেজি ৩৫০ গ্রাম" instead of a decimal
+function fmtStock(stock, p){
+  const unit = (p && p.unit) || 'কেজি';
+  const info = subInfo(p);
+  const st = Number(stock||0);
+  if(!info || info.pack) return `${r3(st)} ${unit}`;
+  const whole = Math.floor(st + 1e-9);
+  const rem = Math.round((st - whole) * info.factor);
+  if(whole===0 && rem===0) return `0 ${unit}`;
+  if(whole===0) return `${rem} ${info.label}`;
+  return rem ? `${whole} ${unit} ${rem} ${info.label}` : `${whole} ${unit}`;
+}
 function orderItems(o){
   if(o.items && o.items.length) return o.items;
   if(o.productId) return [{productId:o.productId, qty:o.qty, unitPrice:o.unitPrice}];
@@ -359,7 +379,7 @@ function renderProducts(){
       <td>${esc(p.unit||'কেজি')}</td>
       ${isAdmin ? `<td class="cell-num">${money(p.cost)}</td>` : ''}
       <td class="cell-num">${money(p.retail)}</td>
-      <td>${p.stock} ${esc(p.unit||'কেজি')} ${Number(p.stock)<=Number(p.minStock) ? '<span class="badge badge-low">লো স্টক</span>' : ''}</td>
+      <td>${fmtStock(p.stock, p)} ${Number(p.stock)<=Number(p.minStock) ? '<span class="badge badge-low">লো স্টক</span>' : ''}</td>
       <td class="cell-center">
         <button class="icon-btn" title="${p.hidden?'আবার চালু করুন':'লুকিয়ে রাখুন'}" onclick="toggleProductHidden('${p.id}')">${p.hidden?'🙈':'👁️'}</button>
         <button class="icon-btn" onclick="openProductForm('${p.id}')">✏️</button>
@@ -500,7 +520,7 @@ function openProductForm(id){
             ${CACHE.settings.productCategories.map(c=>`<option ${p&&p.category===c?'selected':''}>${esc(c)}</option>`).join('')}
           </select>
         </div>
-        <div class="form-field"><label>পরিমাণ/একক (কত কেজি/গ্রাম/লিটারে ক্রয়-বিক্রয় হবে)</label>
+        <div class="form-field"><label>পরিমাণ/একক — মসলা, চাল, ডাল ইত্যাদির জন্য "কেজি" দিন, দামও প্রতি কেজির দিন</label>
           <select id="f_unit">
             ${UNIT_OPTIONS.map(u=>`<option ${(p&&p.unit===u)||(!p&&u==='কেজি')?'selected':''}>${u}</option>`).join('')}
           </select>
@@ -509,21 +529,12 @@ function openProductForm(id){
         <div class="form-field"><label>বিক্রয়মূল্য (৳) — প্রতি এককে</label><input id="f_retail" type="number" value="${p?p.retail:''}"></div>
         <div class="form-field"><label>বর্তমান স্টক (এককে)</label><input id="f_stock" type="number" value="${p?p.stock:0}"></div>
         <div class="form-field"><label>ন্যূনতম স্টক সতর্কতা</label><input id="f_min" type="number" value="${p?p.minStock:5}"></div>
-        <div class="form-field"><label>প্যাকেট/পিসের ওজন বা পরিমাণ (ঐচ্ছিক)</label>
-          <div style="display:flex;gap:6px;"><input id="f_pack" type="number" step="any" placeholder="যেমন ৫০০" value="${p&&p.packSize?p.packSize:''}">
-          <select id="f_packlabel" style="width:110px;">${['গ্রাম','মি.লি.'].map(u=>`<option ${p&&p.packLabel===u?'selected':''}>${u}</option>`).join('')}</select></div>
-          <span class="muted-cell" style="font-size:11.5px;">৫০০ গ্রামের প্যাকেটকে "পিস/প্যাকেট" এককে রেখে এখানে ৫০০ গ্রাম লিখুন — তাহলে অর্ডারে ২৫০ গ্রাম লিখলেই ০.৫ প্যাকেট ধরে দাম ও স্টক হিসাব হবে।</span>
-        </div>
         <div class="form-field"><label>বিক্রির জন্য চালু?</label>
           <label style="display:flex;gap:8px;align-items:center;font-weight:400;"><input id="f_active" type="checkbox" ${p&&p.hidden?'':'checked'}> চালু (অর্ডারে দেখাবে)</label>
           <span class="muted-cell" style="font-size:11.5px;">এখনো কেনা হয়নি এমন পণ্যের টিক তুলে দিন — অর্ডারের সার্চে, লো-স্টক সতর্কতায় ও ইনভেন্টরি রিপোর্টে আসবে না। ক্রয় এন্ট্রি দিলে নিজে থেকেই চালু হয়ে যাবে।</span>
         </div>
-        <div class="form-field span-2">
-          <label>পরিমাণ অনুযায়ী মূল্যের ধাপ (ঐচ্ছিক, শুধু রেফারেন্সের জন্য)</label>
-          <textarea id="f_tiers" rows="2" placeholder="যেমন: ২ কেজি = ৳৫০, ৫ কেজি = ৳১২০, ১০ কেজি = ৳২৩০">${p?esc(p.priceTiers||''):''}</textarea>
-        </div>
       </div>
-      <p style="font-size:12px;color:var(--text-muted);margin-top:4px;">এই ধাপগুলো শুধু তথ্যের জন্য দেখাবে — অর্ডারের সময় কার্টে "একক মূল্য" ঘরে সরাসরি সঠিক রেট বসিয়ে দিতে হবে (অধ্যায়ে বিস্তারিত আছে)।</p>
+
       <div style="margin-top:16px;display:flex;gap:10px;">
         <button class="btn btn-primary" onclick="saveProduct('${p?p.id:''}')">সংরক্ষণ করুন</button>
         <button class="btn btn-outline" onclick="renderProducts()">বাতিল</button>
@@ -545,10 +556,7 @@ function saveProduct(id){
     retail: Number(document.getElementById('f_retail').value||0),
     stock: Number(document.getElementById('f_stock').value||0),
     minStock: Number(document.getElementById('f_min').value||0),
-    priceTiers: document.getElementById('f_tiers').value.trim(),
-    hidden: !document.getElementById('f_active').checked,
-    packSize: Number(document.getElementById('f_pack').value||0) || 0,
-    packLabel: document.getElementById('f_packlabel').value
+    hidden: !document.getElementById('f_active').checked
   };
   if(id){
     const idx = products.findIndex(p=>p.id===id);
@@ -580,7 +588,7 @@ function renderOrders(){
     const items = orderItems(o);
     const names = items.map(it => {
       const p = products.find(p=>p.id===it.productId);
-      return `${esc(p?p.name:'—')} x${it.qty}`;
+      return `${esc(p?p.name:'—')} x${fmtItem(it,p)}`;
     });
     if(names.length<=2) return names.join(', ');
     return names.slice(0,2).join(', ') + ` +আরও ${names.length-2}টি`;
@@ -647,7 +655,10 @@ let ORDER_CART = [];   // [{productId, qty, unitPrice, standardPrice}]
 function openOrderForm(id){
   const orders = CACHE.orders;
   const o = id ? orders.find(x=>x.id===id) : null;
-  ORDER_CART = o ? orderItems(o).map(it=>({...it})) : [];
+  ORDER_CART = o ? orderItems(o).map(it=>{
+    const p = CACHE.products.find(x=>x.id===it.productId), info = subInfo(p);
+    return {...it, sub: !!(info && it.du===info.label)};
+  }) : [];
 
   const html = `
     <div class="panel">
@@ -712,7 +723,7 @@ function renderProductSearch(query){
     <div class="search-result-item" onclick="addToCart('${p.id}')" style="flex-direction:column;align-items:flex-start;gap:2px;">
       <div style="display:flex;justify-content:space-between;width:100%;">
         <span>${esc(p.name)}</span>
-        <span class="muted-cell">স্টক: ${p.stock} ${esc(p.unit||'কেজি')} · ${money(p.retail)}/${esc(p.unit||'কেজি')}</span>
+        <span class="muted-cell">স্টক: ${fmtStock(p.stock, p)} · ${money(p.retail)}/${esc(p.unit||'কেজি')}</span>
       </div>
       ${p.priceTiers ? `<span class="muted-cell" style="font-size:11.5px;">${esc(p.priceTiers)}</span>` : ''}
     </div>`).join('');
@@ -752,7 +763,7 @@ function removeFromCart(productId){
 function cartTotal(){
   const deliveryCharge = Number(document.getElementById('o_delivery')?.value || 0);
   const discount = Number(document.getElementById('o_discount')?.value || 0);
-  const subtotal = ORDER_CART.reduce((s,it)=>s+Number(it.qty)*Number(it.unitPrice),0);
+  const subtotal = ORDER_CART.reduce((s,it)=>s+lineAmt(it),0);
   return Math.max(0, subtotal + deliveryCharge - discount);
 }
 function onPaymentStatusChange(){
@@ -783,7 +794,7 @@ function renderCart(){
   let subtotal = 0;
   const rows = ORDER_CART.map(it=>{
     const p = CACHE.products.find(x=>x.id===it.productId);
-    const lineTotal = Number(it.qty)*Number(it.unitPrice);
+    const lineTotal = lineAmt(it);
     subtotal += lineTotal;
     return `
       <tr>
@@ -791,7 +802,7 @@ function renderCart(){
         <td class="cell-center"><input type="number" min="0.001" step="any" value="${it.sub ? r3(it.qty*(subInfo(p)||{factor:1000}).factor) : r3(it.qty)}" style="width:75px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartQty('${it.productId}', this.value)">
           ${subInfo(p) ? `<select onchange="setCartUnitMode('${it.productId}', this.value==='sub')" style="padding:4px;border:1px solid var(--border);border-radius:6px;"><option value="base" ${it.sub?'':'selected'}>${esc(p?.unit||'কেজি')}</option><option value="sub" ${it.sub?'selected':''}>${subInfo(p).label}</option></select>` : `<span class="muted-cell">${esc(p?.unit||'কেজি')}</span>`}</td>
         <td class="cell-center"><input type="number" min="0" value="${it.unitPrice}" style="width:80px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartPrice('${it.productId}', this.value)"></td>
-        <td class="cell-num">${money(lineTotal)}${(it.qty<1 && subInfo(p)) ? `<br><span class="muted-cell">${fmtQty(it.qty,p)}</span>` : ''}</td>
+        <td class="cell-num">${money(lineTotal)}<br><span class="muted-cell">${it.sub&&subInfo(p) ? r3(it.qty*subInfo(p).factor)+' '+subInfo(p).label : r3(it.qty)+' '+esc(p?.unit||'কেজি')} × ${money(it.unitPrice)}/${esc(p?.unit||'কেজি')}</span></td>
         <td class="cell-center"><button class="icon-btn danger" onclick="removeFromCart('${it.productId}')">🗑️</button></td>
       </tr>`;
   }).join('');
@@ -806,7 +817,7 @@ function renderCart(){
       ${discount>0 ? `<tr><td>ছাড় / ডিসকাউন্ট</td><td class="cell-num">− ${money(discount)}</td></tr>` : ''}
     </table>
     <div class="invoice-total-row" style="margin-top:6px;"><span>সর্বমোট</span><span>${money(Math.max(0,subtotal+deliveryCharge-discount))}</span></div>
-    <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">কোনো পণ্যে আলাদা ছাড় দিতে হলে সেই লাইনের "একক মূল্য" সরাসরি বদলে দিন (যেমন ১০০ টাকার পণ্য ৯৮ টাকায় দিলে ৯৮ লিখুন)। একটা কিনলে একটা ফ্রি দিতে চাইলে ২ পরিমাণ যোগ করে একক মূল্য অর্ধেক করে দিন। সামগ্রিক কুপন/ছাড় দিতে চাইলে উপরের "ছাড় / ডিসকাউন্ট" ঘরে সরাসরি টাকার অঙ্ক লিখুন।</p>
+    <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">দাম বদলাতে চাইলে লাইনের "একক মূল্য" ঘরে নতুন দাম লিখুন। সামগ্রিক ছাড় উপরের "ছাড় / ডিসকাউন্ট" ঘরে দিন।</p>
   `;
 }
 
@@ -814,13 +825,19 @@ function saveOrder(id){
   const orders = CACHE.orders.slice();
   const deliveryCharge = Number(document.getElementById('o_delivery').value||0);
   const discount = Number(document.getElementById('o_discount').value||0);
-  const subtotal = ORDER_CART.reduce((s,it)=>s+Number(it.qty)*Number(it.unitPrice),0);
+  const subtotal = ORDER_CART.reduce((s,it)=>s+lineAmt(it),0);
   const data = {
     date: pickedDate('o_date'),
     customerName: document.getElementById('o_name').value.trim(),
     phone: document.getElementById('o_phone').value.trim(),
     address: document.getElementById('o_addr').value.trim(),
-    items: ORDER_CART.map(it=>({productId:it.productId, qty:Number(it.qty), unitPrice:Number(it.unitPrice), standardPrice:Number(it.standardPrice!=null?it.standardPrice:it.unitPrice)})),
+    items: ORDER_CART.map(it=>{
+      const p = CACHE.products.find(x=>x.id===it.productId);
+      const info = subInfo(p);
+      const useSub = !!(it.sub && info);
+      return {productId:it.productId, qty:Number(it.qty), unitPrice:Number(it.unitPrice), standardPrice:Number(it.standardPrice!=null?it.standardPrice:it.unitPrice),
+        dq: useSub ? r3(Number(it.qty)*info.factor) : r3(Number(it.qty)), du: useSub ? info.label : ((p&&p.unit)||'কেজি')};
+    }),
     discount,
     total: Math.max(0, subtotal + deliveryCharge - discount),
     deliveryCharge,
@@ -897,7 +914,7 @@ function openPurchaseForm(){
         ${dateField('pu_date')}
         <div class="form-field"><label>সরবরাহকারী/মিল/চাতাল নাম</label><input id="pu_supplier"></div>
         <div class="form-field"><label>পণ্য</label>
-          <select id="pu_product">${products.map(p=>`<option value="${p.id}">${esc(p.name)} (একক: ${esc(p.unit||'কেজি')})</option>`).join('')}</select>
+          <select id="pu_product" onchange="refreshPurchaseUnit()">${products.map(p=>`<option value="${p.id}">${esc(p.name)} (একক: ${esc(p.unit||'কেজি')})</option>`).join('')}</select>
         </div>
       </div>
 
@@ -911,7 +928,8 @@ function openPurchaseForm(){
       </div>
 
       <div class="form-grid">
-        <div class="form-field"><label>মোট পরিমাণ (ফ্রি আইটেমসহ, এককে)</label><input id="pu_qty" type="number" value="1"></div>
+        <div class="form-field"><label>মোট পরিমাণ (ফ্রি আইটেমসহ)</label>
+          <div style="display:flex;gap:6px;"><input id="pu_qty" type="number" step="any" value="1" style="flex:1;"><select id="pu_qunit" style="width:90px;"></select></div></div>
         <div class="form-field"><label>এর মধ্যে ফ্রি পরিমাণ (ঐচ্ছিক)</label><input id="pu_freeqty" type="number" value="0"></div>
         <div class="form-field"><label>মোট খরচ — যত টাকা আসলে দিয়েছেন (৳)</label><input id="pu_cost" type="number" value="0"></div>
         <div class="form-field"><label>পেমেন্ট স্ট্যাটাস</label>
@@ -919,12 +937,19 @@ function openPurchaseForm(){
         </div>
         <div class="form-field"><label>পরিশোধের পরিমাণ (৳)</label><input id="pu_paid" type="number" value="0"></div>
       </div>
-      <p style="font-size:12px;color:var(--text-muted);margin-top:10px;">উদাহরণ: ১০টি কিনলে ১টি ফ্রি পেলে — মোট পরিমাণে ১১ লিখুন, ফ্রি পরিমাণে ১ লিখুন, আর মোট খরচে শুধু যা আসলে টাকা দিয়েছেন তা লিখুন (ফ্রি আইটেমের জন্য বাড়তি কিছু যোগ করবেন না)। স্টক ঠিক ১১ বাড়বে, আর গড় খরচ/একক এমনিতেই কমে গিয়ে সঠিক হিসাব দেখাবে।</p>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:10px;">ফ্রি পেলে মোট পরিমাণে ফ্রিসহ লিখুন, আর "মোট খরচে" শুধু যত টাকা দিয়েছেন তা লিখুন।</p>
       <div style="margin-top:16px;display:flex;gap:10px;">
         <button class="btn btn-primary" onclick="savePurchase()">সংরক্ষণ করুন (স্টকে যোগ হবে)</button>
         <button class="btn btn-outline" onclick="renderPurchases()">বাতিল</button>
       </div>
     </div>`;
+  refreshPurchaseUnit();
+}
+function refreshPurchaseUnit(){
+  const p = CACHE.products.find(x=>x.id===document.getElementById('pu_product').value);
+  const info = subInfo(p), sel = document.getElementById('pu_qunit');
+  if(!sel) return;
+  sel.innerHTML = `<option value="base">${esc((p&&p.unit)||'কেজি')}</option>` + (info ? `<option value="sub">${info.label}</option>` : '');
 }
 function calcPurchaseQty(){
   const bags = Number(document.getElementById('pu_bags').value||0);
@@ -942,8 +967,11 @@ function savePurchase(){
   const products = CACHE.products.slice();
   const supplier = document.getElementById('pu_supplier').value.trim();
   const productId = document.getElementById('pu_product').value;
-  const qty = Number(document.getElementById('pu_qty').value||0);
-  const freeQty = Number(document.getElementById('pu_freeqty').value||0);
+  const pSel = products.find(x=>x.id===productId);
+  const info = subInfo(pSel);
+  const div = (document.getElementById('pu_qunit').value==='sub' && info) ? info.factor : 1;
+  const qty = r3(Number(document.getElementById('pu_qty').value||0)/div);
+  const freeQty = r3(Number(document.getElementById('pu_freeqty').value||0)/div);
   if(!supplier || qty<=0){ alert('সরবরাহকারীর নাম ও পরিমাণ সঠিকভাবে দিন'); return; }
   if(freeQty>qty){ alert('ফ্রি পরিমাণ মোট পরিমাণের চেয়ে বেশি হতে পারে না'); return; }
   const data = {
@@ -1116,7 +1144,7 @@ function renderReturns(){
     const p = CACHE.products.find(x=>x.id===r.productId);
     return `<tr>
       <td>${r.date}</td><td>${r.orderId}</td><td>${esc(r.customerName)}</td><td>${esc(p?p.name:'—')}</td>
-      <td class="cell-num">${r.qty}</td><td class="cell-num">${money(r.refundAmount)}</td><td>${esc(r.reason||'—')}</td>
+      <td class="cell-num">${(r.dq!=null&&r.du) ? r.dq+' '+r.du : fmtQty(r.qty, CACHE.products.find(x=>x.id===r.productId))}</td><td class="cell-num">${money(r.refundAmount)}</td><td>${esc(r.reason||'—')}</td>
     </tr>`;
   }).join('');
 
@@ -1152,14 +1180,15 @@ function loadReturnOrder(){
     const p = CACHE.products.find(x=>x.id===it.productId);
     return `<tr>
       <td>${esc(p?p.name:'—')}</td>
-      <td class="cell-center">${it.qty}</td>
+      <td class="cell-center">${fmtItem(it,p)}</td>
       <td class="cell-num">${money(it.unitPrice)}</td>
-      <td class="cell-center"><input type="number" min="0" step="any" max="${it.qty}" value="0" id="ret_qty_${idx}" style="width:70px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;"></td>
+      <td class="cell-center"><input type="number" min="0" step="any" value="0" id="ret_qty_${idx}" style="width:80px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;">
+        ${subInfo(p) ? `<select id="ret_unit_${idx}" style="padding:4px;border:1px solid var(--border);border-radius:6px;"><option value="base" ${it.du===subInfo(p).label?'':'selected'}>${esc(p.unit||'কেজি')}</option><option value="sub" ${it.du===subInfo(p).label?'selected':''}>${subInfo(p).label}</option></select>` : `<span class="muted-cell">${esc((p&&p.unit)||'কেজি')}</span>`}</td>
     </tr>`;
   }).join('');
   holder.innerHTML = `
     <div class="table-wrap"><table>
-      <thead><tr><th>পণ্য</th><th>অর্ডারকৃত পরিমাণ</th><th>একক মূল্য</th><th>কত পরিমাণ ফেরত নেবেন</th></tr></thead>
+      <thead><tr><th>পণ্য</th><th>অর্ডারকৃত পরিমাণ</th><th>একক মূল্য</th><th>কত ফেরত নেবেন</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
     <div style="margin-top:12px;max-width:240px;">${dateField('ret_date')}</div>
@@ -1179,21 +1208,29 @@ function submitReturn(orderId){
   const order = {...orders[idx]};
   const items = orderItems(order).map(it=>({...it}));
   const reason = document.getElementById('ret_reason').value.trim();
-  let anyReturned = false;
+  let anyReturned = false, overLimit = false;
   const newEntries = [];
 
   items.forEach((it, i)=>{
     const field = document.getElementById(`ret_qty_${i}`);
-    const retQty = field ? Number(field.value||0) : 0;
+    const pRet = products.find(x=>x.id===it.productId);
+    const infoRet = subInfo(pRet);
+    const unitSel = document.getElementById(`ret_unit_${i}`);
+    const useSub = !!(unitSel && unitSel.value==='sub' && infoRet);
+    const typed = field ? Number(field.value||0) : 0;
+    const retQty = r3(useSub ? typed/infoRet.factor : typed);
+    if(retQty > Number(it.qty) + 0.0005){ overLimit = true; return; }
     if(retQty>0){
       anyReturned = true;
       const refundAmount = retQty * Number(it.unitPrice);
       newEntries.push({
         id: genId('RET-', returns.concat(newEntries)),
         date: pickedDate('ret_date'), orderId: order.id, customerName: order.customerName,
-        productId: it.productId, qty: retQty, refundAmount, reason
+        productId: it.productId, qty: retQty, refundAmount: Math.round(refundAmount*100)/100, reason,
+        dq: r3(typed), du: useSub ? infoRet.label : ((pRet&&pRet.unit)||'কেজি')
       });
-      it.qty = Number(it.qty) - retQty;
+      it.qty = r3(Number(it.qty) - retQty);
+      syncDisp(it, products.find(x=>x.id===it.productId));
       if(order.status==='Delivered'){
         const pIdx = products.findIndex(p=>p.id===it.productId);
         if(pIdx>-1){ products[pIdx] = {...products[pIdx], stock: r3(Number(products[pIdx].stock)+retQty)}; }
@@ -1201,11 +1238,12 @@ function submitReturn(orderId){
     }
   });
 
+  if(overLimit){ alert('ফেরত নেওয়ার পরিমাণ অর্ডারের পরিমাণের চেয়ে বেশি হতে পারে না।'); return; }
   if(!anyReturned){ alert('অন্তত একটি পণ্যের রিটার্ন পরিমাণ দিন'); return; }
 
   const remainingItems = items.filter(it=>Number(it.qty)>0);
   order.items = remainingItems;
-  order.total = remainingItems.reduce((s,it)=>s+Number(it.qty)*Number(it.unitPrice),0) + Number(order.deliveryCharge||0);
+  order.total = remainingItems.reduce((s,it)=>s+lineAmt(it),0) + Number(order.deliveryCharge||0);
   delete order.productId; delete order.qty; delete order.unitPrice;
 
   orders[idx] = order;
@@ -1522,7 +1560,7 @@ function drawInvoice(){
     const p = CACHE.products.find(x=>x.id===it.productId);
     return `<tr>
       <td>${esc(p?p.name:'—')}</td>
-      <td class="cell-num">${fmtQty(it.qty, p)}</td><td class="cell-num">${money(it.unitPrice)}${p?.unit?`/${esc(p.unit)}`:''}</td><td class="cell-num">${money(Math.round(it.qty*it.unitPrice*100)/100)}</td>
+      <td class="cell-num">${fmtItem(it, p)}</td><td class="cell-num">${money(it.unitPrice)}${p?.unit?`/${esc(p.unit)}`:''}</td><td class="cell-num">${money(lineAmt(it))}</td>
     </tr>`;
   }).join('');
 
@@ -1566,11 +1604,16 @@ function drawInvoice(){
   `;
   holder.innerHTML = invHtml;
 }
+function printWhenReady(){
+  const imgs = Array.from(document.querySelectorAll('#printArea img'));
+  const waits = imgs.map(im => (im.complete && im.naturalWidth) ? Promise.resolve() : new Promise(r => { im.onload = r; im.onerror = r; }));
+  Promise.race([Promise.all(waits), new Promise(r => setTimeout(r, 3000))]).then(() => window.print());
+}
 function printInvoice(thermal){
   const box = document.getElementById('invoiceBox').outerHTML;
   document.getElementById('printArea').innerHTML = box;
   document.body.classList.toggle('thermal', !!thermal);
-  window.print();
+  printWhenReady();
 }
 function shareInvoiceImage(){
   const statusEl = document.getElementById('imgShareStatus');
@@ -1607,7 +1650,7 @@ function shareWhatsapp(orderId){
   const items = orderItems(o);
   const lines = items.map(it=>{
     const p = CACHE.products.find(x=>x.id===it.productId);
-    return `${p?p.name:''} x ${fmtQty(it.qty, p)}`;
+    return `${p?p.name:''} — ${fmtItem(it, p)} = ৳${lineAmt(it)}`;
   }).join('\n');
   const text = `Avera Mart ইনভয়েস ${o.id}\nকাস্টমার: ${o.customerName}\n${lines}\nসর্বমোট: ৳${o.total}\nধন্যবাদ প্রকৃতির ছোঁয়া, নিরাপদ আস্থা — Avera Mart থেকে কেনাকাটার জন্য।`;
   const phone = (o.phone||'').replace(/\D/g,'');
@@ -1762,15 +1805,22 @@ function removeExpenseCategory(name){
    STOCK REPORT PRINT (for physical month-end stock counting)
    ============================================================ */
 function printStockReport(onlyInStock){
+  const isAdmin = getSession().role==='admin';
+  const priceOf = p => Number(isAdmin ? p.cost : p.retail) || 0;   // manager never sees cost price
+  const priceLabel = isAdmin ? 'ক্রয়মূল্য' : 'বিক্রয়মূল্য';
   const list = CACHE.products.filter(p => !p.hidden && (!onlyInStock || Number(p.stock) > 0))
     .slice().sort((a,b) => String(a.category).localeCompare(String(b.category),'bn') || String(a.name).localeCompare(String(b.name),'bn'));
   if(!list.length){ alert('প্রিন্ট করার মতো কোনো পণ্য নেই।'); return; }
-  let body = '', lastCat = null, n = 0;
+  let body = '', lastCat = null, n = 0, grand = 0, catSum = 0;
+  const flushCat = () => { if(lastCat!==null) body += `<tr class="sp-sub"><td colspan="5" style="text-align:right;">${esc(lastCat||'অন্যান্য')} — উপমোট</td><td class="sp-num">${money(catSum)}</td><td></td><td></td></tr>`; catSum = 0; };
   list.forEach(p => {
-    if(p.category !== lastCat){ lastCat = p.category; body += `<tr class="sp-cat"><td colspan="7">${esc(p.category||'অন্যান্য')}</td></tr>`; }
+    if(p.category !== lastCat){ flushCat(); lastCat = p.category; body += `<tr class="sp-cat"><td colspan="8">${esc(p.category||'অন্যান্য')}</td></tr>`; }
     n++;
-    body += `<tr><td>${n}</td><td>${esc(p.name)}</td><td>${esc(p.unit||'কেজি')}</td><td class="sp-num">${r3(p.stock)}</td><td class="sp-blank"></td><td class="sp-blank"></td><td class="sp-blank"></td></tr>`;
+    const value = Math.round(Number(p.stock||0) * priceOf(p) * 100) / 100;
+    grand += value; catSum += value;
+    body += `<tr><td>${n}</td><td>${esc(p.name)}</td><td>${esc(p.unit||'কেজি')}</td><td class="sp-num">${money(priceOf(p))}</td><td class="sp-num">${fmtStock(p.stock, p)}</td><td class="sp-num">${money(value)}</td><td class="sp-blank"></td><td class="sp-blank"></td></tr>`;
   });
+  flushCat();
   const d = new Date();
   const dateStr = `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
   document.getElementById('printArea').innerHTML = `
@@ -1779,16 +1829,17 @@ function printStockReport(onlyInStock){
         <img src="logo.jpg" alt="">
         <div><h3>Avera Mart — স্টক রিপোর্ট</h3>
         <div>${esc(CACHE.settings.businessAddress||'')}</div>
-        <div>তারিখ: ${dateStr} · ${onlyInStock?'শুধু স্টকে থাকা পণ্য':'সব চালু পণ্য'} · মোট ${list.length}টি</div></div>
+        <div>তারিখ: ${dateStr} · ${onlyInStock?'শুধু স্টকে থাকা পণ্য':'সব চালু পণ্য'} · মোট ${list.length}টি পণ্য</div></div>
       </div>
       <table>
-        <thead><tr><th>ক্র.</th><th>পণ্যের নাম</th><th>একক</th><th>সফটওয়্যার স্টক</th><th>ফিজিক্যাল গণনা</th><th>পার্থক্য</th><th>মন্তব্য</th></tr></thead>
+        <thead><tr><th>ক্র.</th><th>পণ্যের নাম</th><th>একক</th><th>${priceLabel}/একক</th><th>স্টক</th><th>মোট টাকা</th><th>ফিজিক্যাল গণনা</th><th>পার্থক্য</th></tr></thead>
         <tbody>${body}</tbody>
+        <tfoot><tr class="sp-total"><td colspan="5" style="text-align:right;">সর্বমোট স্টকের মূল্য (${priceLabel}ে)</td><td class="sp-num">${money(grand)}</td><td colspan="2"></td></tr></tfoot>
       </table>
       <div class="sp-sign"><span>গণনাকারী: ____________</span><span>যাচাইকারী: ____________</span><span>অনুমোদন: ____________</span></div>
     </div>`;
   document.body.classList.remove('thermal');
-  window.print();
+  printWhenReady();
 }
 
 /* ============================================================
