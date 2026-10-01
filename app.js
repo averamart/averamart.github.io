@@ -137,7 +137,9 @@ function saveUsers(obj){ CACHE.users = obj; docRef('users').set(obj); }
 
 /* ---------------- Helpers ---------------- */
 function money(n){ return '৳' + Number(n||0).toLocaleString('en-BD', {maximumFractionDigits:2}); }
-function todayStr(){ return new Date().toISOString().slice(0,10); }
+function todayStr(){ return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Dhaka',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()); }
+function pickedDate(id){ const v = (document.getElementById(id)||{}).value; return /^\d{4}-\d{2}-\d{2}$/.test(v||'') ? v : todayStr(); }
+function dateField(id, value){ return `<div class="form-field"><label>তারিখ (না বদলালে আজকের তারিখ)</label><input id="${id}" type="date" value="${value||todayStr()}"></div>`; }
 function genId(prefix, list){
   const nums = list.map(x => parseInt((x.id||'').replace(/\D/g,'')) || 0);
   const next = (nums.length? Math.max(...nums) : 0) + 1;
@@ -148,12 +150,20 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&am
 /* An order can hold multiple product line items. Older orders saved before this
    feature only had a single productId/qty/unitPrice — this normalizes both shapes. */
 function r3(n){ return Math.round(Number(n||0)*1000)/1000; }
-function subUnit(unit){ return unit==='কেজি' ? 'গ্রাম' : (unit==='লিটার' ? 'মি.লি.' : null); }
-function fmtQty(qty, unit){
-  unit = unit || 'কেজি';
-  const sub = subUnit(unit);
-  if(sub && Number(qty) > 0 && Number(qty) < 1) return `${r3(Number(qty)*1000)} ${sub}`;
-  return `${r3(qty)} ${unit}`;
+function subInfo(p){
+  if(!p) return null;
+  if(Number(p.packSize)>0) return {label: p.packLabel || 'গ্রাম', factor: Number(p.packSize), pack:true};
+  if(p.unit==='কেজি') return {label:'গ্রাম', factor:1000};
+  if(p.unit==='লিটার') return {label:'মি.লি.', factor:1000};
+  return null;
+}
+function fmtQty(qty, p){
+  const unit = (p && p.unit) || 'কেজি';
+  const info = subInfo(p || {unit});
+  const q = Number(qty);
+  if(info && q > 0 && q < 1) return `${r3(q*info.factor)} ${info.label}`;
+  if(info && info.pack && q > 1 && Math.abs(q - Math.round(q)) > 0.0001) return `${r3(q)} ${unit} (${r3(q*info.factor)} ${info.label})`;
+  return `${r3(q)} ${unit}`;
 }
 function orderItems(o){
   if(o.items && o.items.length) return o.items;
@@ -499,6 +509,11 @@ function openProductForm(id){
         <div class="form-field"><label>বিক্রয়মূল্য (৳) — প্রতি এককে</label><input id="f_retail" type="number" value="${p?p.retail:''}"></div>
         <div class="form-field"><label>বর্তমান স্টক (এককে)</label><input id="f_stock" type="number" value="${p?p.stock:0}"></div>
         <div class="form-field"><label>ন্যূনতম স্টক সতর্কতা</label><input id="f_min" type="number" value="${p?p.minStock:5}"></div>
+        <div class="form-field"><label>প্যাকেট/পিসের ওজন বা পরিমাণ (ঐচ্ছিক)</label>
+          <div style="display:flex;gap:6px;"><input id="f_pack" type="number" step="any" placeholder="যেমন ৫০০" value="${p&&p.packSize?p.packSize:''}">
+          <select id="f_packlabel" style="width:110px;">${['গ্রাম','মি.লি.'].map(u=>`<option ${p&&p.packLabel===u?'selected':''}>${u}</option>`).join('')}</select></div>
+          <span class="muted-cell" style="font-size:11.5px;">৫০০ গ্রামের প্যাকেটকে "পিস/প্যাকেট" এককে রেখে এখানে ৫০০ গ্রাম লিখুন — তাহলে অর্ডারে ২৫০ গ্রাম লিখলেই ০.৫ প্যাকেট ধরে দাম ও স্টক হিসাব হবে।</span>
+        </div>
         <div class="form-field"><label>বিক্রির জন্য চালু?</label>
           <label style="display:flex;gap:8px;align-items:center;font-weight:400;"><input id="f_active" type="checkbox" ${p&&p.hidden?'':'checked'}> চালু (অর্ডারে দেখাবে)</label>
           <span class="muted-cell" style="font-size:11.5px;">এখনো কেনা হয়নি এমন পণ্যের টিক তুলে দিন — অর্ডারের সার্চে, লো-স্টক সতর্কতায় ও ইনভেন্টরি রিপোর্টে আসবে না। ক্রয় এন্ট্রি দিলে নিজে থেকেই চালু হয়ে যাবে।</span>
@@ -531,7 +546,9 @@ function saveProduct(id){
     stock: Number(document.getElementById('f_stock').value||0),
     minStock: Number(document.getElementById('f_min').value||0),
     priceTiers: document.getElementById('f_tiers').value.trim(),
-    hidden: !document.getElementById('f_active').checked
+    hidden: !document.getElementById('f_active').checked,
+    packSize: Number(document.getElementById('f_pack').value||0) || 0,
+    packLabel: document.getElementById('f_packlabel').value
   };
   if(id){
     const idx = products.findIndex(p=>p.id===id);
@@ -636,6 +653,7 @@ function openOrderForm(id){
     <div class="panel">
       <h3>${o?'অর্ডার সম্পাদনা':'নতুন অর্ডার'}</h3>
       <div class="form-grid">
+        ${dateField('o_date', o?o.date:'')}
         <div class="form-field"><label>কাস্টমার নাম</label><input id="o_name" value="${o?esc(o.customerName):''}"></div>
         <div class="form-field"><label>মোবাইল নম্বর</label><input id="o_phone" value="${o?esc(o.phone):''}"></div>
         <div class="form-field span-2"><label>ডেলিভারি ঠিকানা</label><input id="o_addr" value="${o?esc(o.address):''}"></div>
@@ -716,7 +734,8 @@ function updateCartQty(productId, qty){
   const it = ORDER_CART.find(x=>x.productId===productId);
   if(it){
     const v = Number(qty)||0;
-    it.qty = Math.max(0.001, it.sub ? v/1000 : v) || 1;
+    const f = (subInfo(CACHE.products.find(x=>x.id===productId))||{factor:1000}).factor;
+    it.qty = Math.max(0.001, it.sub ? v/f : v) || 1;
   }
   renderCart();
 }
@@ -769,10 +788,10 @@ function renderCart(){
     return `
       <tr>
         <td>${esc(p?p.name:'—')}</td>
-        <td class="cell-center"><input type="number" min="0.001" step="any" value="${it.sub ? r3(it.qty*1000) : r3(it.qty)}" style="width:75px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartQty('${it.productId}', this.value)">
-          ${subUnit(p?.unit||'কেজি') ? `<select onchange="setCartUnitMode('${it.productId}', this.value==='sub')" style="padding:4px;border:1px solid var(--border);border-radius:6px;"><option value="base" ${it.sub?'':'selected'}>${esc(p?.unit||'কেজি')}</option><option value="sub" ${it.sub?'selected':''}>${subUnit(p?.unit||'কেজি')}</option></select>` : `<span class="muted-cell">${esc(p?.unit||'কেজি')}</span>`}</td>
+        <td class="cell-center"><input type="number" min="0.001" step="any" value="${it.sub ? r3(it.qty*(subInfo(p)||{factor:1000}).factor) : r3(it.qty)}" style="width:75px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartQty('${it.productId}', this.value)">
+          ${subInfo(p) ? `<select onchange="setCartUnitMode('${it.productId}', this.value==='sub')" style="padding:4px;border:1px solid var(--border);border-radius:6px;"><option value="base" ${it.sub?'':'selected'}>${esc(p?.unit||'কেজি')}</option><option value="sub" ${it.sub?'selected':''}>${subInfo(p).label}</option></select>` : `<span class="muted-cell">${esc(p?.unit||'কেজি')}</span>`}</td>
         <td class="cell-center"><input type="number" min="0" value="${it.unitPrice}" style="width:80px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartPrice('${it.productId}', this.value)"></td>
-        <td class="cell-num">${money(lineTotal)}</td>
+        <td class="cell-num">${money(lineTotal)}${(it.qty<1 && subInfo(p)) ? `<br><span class="muted-cell">${fmtQty(it.qty,p)}</span>` : ''}</td>
         <td class="cell-center"><button class="icon-btn danger" onclick="removeFromCart('${it.productId}')">🗑️</button></td>
       </tr>`;
   }).join('');
@@ -797,6 +816,7 @@ function saveOrder(id){
   const discount = Number(document.getElementById('o_discount').value||0);
   const subtotal = ORDER_CART.reduce((s,it)=>s+Number(it.qty)*Number(it.unitPrice),0);
   const data = {
+    date: pickedDate('o_date'),
     customerName: document.getElementById('o_name').value.trim(),
     phone: document.getElementById('o_phone').value.trim(),
     address: document.getElementById('o_addr').value.trim(),
@@ -820,7 +840,6 @@ function saveOrder(id){
     orders[idx] = {...prev, ...data};
   } else {
     data.id = genId('ORD-', orders);
-    data.date = todayStr();
     data.status = 'Pending';
     orders.push(data);
   }
@@ -875,6 +894,7 @@ function openPurchaseForm(){
     <div class="panel">
       <h3>নতুন ক্রয় এন্ট্রি</h3>
       <div class="form-grid">
+        ${dateField('pu_date')}
         <div class="form-field"><label>সরবরাহকারী/মিল/চাতাল নাম</label><input id="pu_supplier"></div>
         <div class="form-field"><label>পণ্য</label>
           <select id="pu_product">${products.map(p=>`<option value="${p.id}">${esc(p.name)} (একক: ${esc(p.unit||'কেজি')})</option>`).join('')}</select>
@@ -927,7 +947,7 @@ function savePurchase(){
   if(!supplier || qty<=0){ alert('সরবরাহকারীর নাম ও পরিমাণ সঠিকভাবে দিন'); return; }
   if(freeQty>qty){ alert('ফ্রি পরিমাণ মোট পরিমাণের চেয়ে বেশি হতে পারে না'); return; }
   const data = {
-    id: genId('PO-', purchases), date: todayStr(), supplier, productId, qty, freeQty,
+    id: genId('PO-', purchases), date: pickedDate('pu_date'), supplier, productId, qty, freeQty,
     totalCost: Number(document.getElementById('pu_cost').value||0),
     paymentStatus: document.getElementById('pu_pay').value,
     paidAmount: Number(document.getElementById('pu_paid').value||0)
@@ -984,6 +1004,7 @@ function openExpenseForm(kind){
     <div class="panel">
       <h3>${inc?'কমিশন / আয় এন্ট্রি':'নতুন খরচ এন্ট্রি'}</h3>
       <div class="form-grid">
+        ${dateField('e_date')}
         <div class="form-field"><label>ক্যাটাগরি</label>
           <select id="e_cat">${cats.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
         </div>
@@ -1002,7 +1023,7 @@ function openExpenseForm(kind){
 function saveExpense(kind){
   const expenses = CACHE.expenses.slice();
   const data = {
-    id: genId('EXP-', expenses), date: todayStr(),
+    id: genId('EXP-', expenses), date: pickedDate('e_date'),
     category: document.getElementById('e_cat').value,
     amount: Number(document.getElementById('e_amount').value||0),
     method: document.getElementById('e_method').value,
@@ -1141,6 +1162,7 @@ function loadReturnOrder(){
       <thead><tr><th>পণ্য</th><th>অর্ডারকৃত পরিমাণ</th><th>একক মূল্য</th><th>কত পরিমাণ ফেরত নেবেন</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
+    <div style="margin-top:12px;max-width:240px;">${dateField('ret_date')}</div>
     <div class="form-field" style="margin-top:12px;">
       <label>কারণ (ঐচ্ছিক)</label>
       <textarea id="ret_reason" rows="2" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:7px;background:var(--bg);"></textarea>
@@ -1168,7 +1190,7 @@ function submitReturn(orderId){
       const refundAmount = retQty * Number(it.unitPrice);
       newEntries.push({
         id: genId('RET-', returns.concat(newEntries)),
-        date: todayStr(), orderId: order.id, customerName: order.customerName,
+        date: pickedDate('ret_date'), orderId: order.id, customerName: order.customerName,
         productId: it.productId, qty: retQty, refundAmount, reason
       });
       it.qty = Number(it.qty) - retQty;
@@ -1384,6 +1406,7 @@ function openContributionForm(shareholderId){
   document.getElementById('modalHolder').innerHTML = `
     <div class="panel">
       <h3>${esc(sh.name)} — নতুন শেয়ার ক্রয়/জমা যোগ করুন</h3>
+      <div style="max-width:240px;margin-bottom:10px;">${dateField('c_date')}</div>
       <div class="form-field" style="max-width:220px;"><label>পরিমাণ (৳)</label><input id="c_amount" type="number" value="1000"></div>
       <div style="display:flex;gap:8px;margin-top:8px;">
         <button class="btn btn-outline btn-sm" onclick="document.getElementById('c_amount').value=1000">৳১,০০০</button>
@@ -1403,7 +1426,7 @@ function saveContribution(shareholderId){
   const idx = shareholders.findIndex(s=>s.id===shareholderId);
   shareholders[idx] = {...shareholders[idx], totalInvested: Number(shareholders[idx].totalInvested||0)+amount};
   const contributions = CACHE.contributions.slice();
-  contributions.push({ id: genId('CON-', contributions), date: todayStr(), shareholderId, amount });
+  contributions.push({ id: genId('CON-', contributions), date: pickedDate('c_date'), shareholderId, amount });
   saveCollection('shareholders', shareholders);
   saveCollection('contributions', contributions);
   renderShareholders();
@@ -1499,7 +1522,7 @@ function drawInvoice(){
     const p = CACHE.products.find(x=>x.id===it.productId);
     return `<tr>
       <td>${esc(p?p.name:'—')}</td>
-      <td class="cell-num">${fmtQty(it.qty, p?.unit)}</td><td class="cell-num">${money(it.unitPrice)}${p?.unit?`/${esc(p.unit)}`:''}</td><td class="cell-num">${money(Math.round(it.qty*it.unitPrice*100)/100)}</td>
+      <td class="cell-num">${fmtQty(it.qty, p)}</td><td class="cell-num">${money(it.unitPrice)}${p?.unit?`/${esc(p.unit)}`:''}</td><td class="cell-num">${money(Math.round(it.qty*it.unitPrice*100)/100)}</td>
     </tr>`;
   }).join('');
 
@@ -1511,7 +1534,7 @@ function drawInvoice(){
           <p class="tagline">প্রকৃতির ছোঁয়া, নিরাপদ আস্থা</p>
           <p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">${esc(CACHE.settings.businessAddress)}</p>
         </div>
-        <img src="assets/logo.jpg" alt="logo">
+        <img src="logo.jpg" alt="logo">
       </div>
       <div class="invoice-meta">
         <div>ইনভয়েস: ${o.id}<br>তারিখ: ${o.date}</div>
@@ -1584,7 +1607,7 @@ function shareWhatsapp(orderId){
   const items = orderItems(o);
   const lines = items.map(it=>{
     const p = CACHE.products.find(x=>x.id===it.productId);
-    return `${p?p.name:''} x ${fmtQty(it.qty, p?.unit)}`;
+    return `${p?p.name:''} x ${fmtQty(it.qty, p)}`;
   }).join('\n');
   const text = `Avera Mart ইনভয়েস ${o.id}\nকাস্টমার: ${o.customerName}\n${lines}\nসর্বমোট: ৳${o.total}\nধন্যবাদ প্রকৃতির ছোঁয়া, নিরাপদ আস্থা — Avera Mart থেকে কেনাকাটার জন্য।`;
   const phone = (o.phone||'').replace(/\D/g,'');
@@ -1753,7 +1776,7 @@ function printStockReport(onlyInStock){
   document.getElementById('printArea').innerHTML = `
     <div class="stock-print">
       <div class="sp-head">
-        <img src="assets/logo.jpg" alt="">
+        <img src="logo.jpg" alt="">
         <div><h3>Avera Mart — স্টক রিপোর্ট</h3>
         <div>${esc(CACHE.settings.businessAddress||'')}</div>
         <div>তারিখ: ${dateStr} · ${onlyInStock?'শুধু স্টকে থাকা পণ্য':'সব চালু পণ্য'} · মোট ${list.length}টি</div></div>
