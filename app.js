@@ -162,7 +162,22 @@ function subInfo(p){
   if(!p) return null;
   if(Number(p.packSize)>0) return {label: p.packLabel || 'গ্রাম', factor: Number(p.packSize), pack:true};
   const f = UNIT_FAMILY[p.unit];
-  return f ? {...f} : null;
+  if(f) return {...f};
+  return parsePackUnit(p.unit);
+}
+// Understands units typed as text such as "৫০০ গ্রাম", "500g", "১ কেজি", "২৫০ মি.লি.", "১ লিটার", "১২ পিস"
+function parsePackUnit(unit){
+  const bn = '০১২৩৪৫৬৭৮৯';
+  const t = String(unit||'').trim().replace(/[০-৯]/g, d => bn.indexOf(d)).replace(/\s+/g,' ');
+  const m = t.match(/^(\d+(?:\.\d+)?)\s*(গ্রাম|গ্রা\.?|gm|g|কেজি|কেজি\.?|kg|লিটার|ltr|l|মিলিলিটার|মি\.?লি\.?|ml|পিস|pcs)$/i);
+  if(!m) return null;
+  const n = Number(m[1]); if(!(n>0)) return null;
+  const u = m[2].toLowerCase();
+  if(['গ্রাম','গ্রা','গ্রা.','gm','g'].includes(u)) return {label:'গ্রাম', factor:n, pack:true};
+  if(['কেজি','কেজি.','kg'].includes(u))           return {label:'গ্রাম', factor:n*1000, pack:true};
+  if(['লিটার','ltr','l'].includes(u))              return {label:'মি.লি.', factor:n*1000, pack:true};
+  if(u==='পিস' || u==='pcs')                       return {label:'পিস', factor:n, pack:true};
+  return {label:'মি.লি.', factor:n, pack:true};
 }
 function fmtQty(qty, p){
   const unit = (p && p.unit) || 'কেজি';
