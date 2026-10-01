@@ -147,6 +147,14 @@ function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&am
 
 /* An order can hold multiple product line items. Older orders saved before this
    feature only had a single productId/qty/unitPrice — this normalizes both shapes. */
+function r3(n){ return Math.round(Number(n||0)*1000)/1000; }
+function subUnit(unit){ return unit==='কেজি' ? 'গ্রাম' : (unit==='লিটার' ? 'মি.লি.' : null); }
+function fmtQty(qty, unit){
+  unit = unit || 'কেজি';
+  const sub = subUnit(unit);
+  if(sub && Number(qty) > 0 && Number(qty) < 1) return `${r3(Number(qty)*1000)} ${sub}`;
+  return `${r3(qty)} ${unit}`;
+}
 function orderItems(o){
   if(o.items && o.items.length) return o.items;
   if(o.productId) return [{productId:o.productId, qty:o.qty, unitPrice:o.unitPrice}];
@@ -287,10 +295,11 @@ function renderDashboard(){
   const month = todayStr().slice(0,7);
   const monthOrders = orders.filter(o => o.date && o.date.slice(0,7)===month && o.status==='Delivered');
   const totalSalesMonth = monthOrders.reduce((s,o)=>s+Number(o.total||0),0);
-  const monthExpenses = expenses.filter(e=>e.date && e.date.slice(0,7)===month).reduce((s,e)=>s+Number(e.amount||0),0);
+  const monthExpenses = expenses.filter(e=>e.kind!=='income' && e.date && e.date.slice(0,7)===month).reduce((s,e)=>s+Number(e.amount||0),0);
+  const monthIncome = expenses.filter(e=>e.kind==='income' && e.date && e.date.slice(0,7)===month).reduce((s,e)=>s+Number(e.amount||0),0);
   const cogs = monthOrders.reduce((s,o)=> s + orderItems(o).reduce((s2,it)=>{ const p=products.find(p=>p.id===it.productId); return s2 + (p?p.cost:0)*Number(it.qty||0); },0), 0);
-  const netProfit = totalSalesMonth - cogs - monthExpenses;
-  const lowStock = products.filter(p=>Number(p.stock) <= Number(p.minStock));
+  const netProfit = totalSalesMonth - cogs - monthExpenses + monthIncome;
+  const lowStock = products.filter(p=>!p.hidden && Number(p.stock) <= Number(p.minStock));
   const pending = orders.filter(o=>o.status==='Pending' || o.status==='Processing');
 
   let cards = `
@@ -333,15 +342,16 @@ function renderProducts(){
   const products = CACHE.products;
 
   let rows = products.map(p => `
-    <tr>
+    <tr style="${p.hidden?'opacity:.55;':''}">
       <td>${p.id}</td>
-      <td>${esc(p.name)}${p.priceTiers ? `<br><span class="muted-cell">${esc(p.priceTiers)}</span>` : ''}</td>
+      <td>${esc(p.name)}${p.hidden ? ' <span class="badge badge-cancelled">লুকানো</span>' : ''}${p.priceTiers ? `<br><span class="muted-cell">${esc(p.priceTiers)}</span>` : ''}</td>
       <td>${esc(p.category)}</td>
       <td>${esc(p.unit||'কেজি')}</td>
       ${isAdmin ? `<td class="cell-num">${money(p.cost)}</td>` : ''}
       <td class="cell-num">${money(p.retail)}</td>
       <td>${p.stock} ${esc(p.unit||'কেজি')} ${Number(p.stock)<=Number(p.minStock) ? '<span class="badge badge-low">লো স্টক</span>' : ''}</td>
       <td class="cell-center">
+        <button class="icon-btn" title="${p.hidden?'আবার চালু করুন':'লুকিয়ে রাখুন'}" onclick="toggleProductHidden('${p.id}')">${p.hidden?'🙈':'👁️'}</button>
         <button class="icon-btn" onclick="openProductForm('${p.id}')">✏️</button>
         ${isAdmin ? `<button class="icon-btn danger" onclick="deleteProduct('${p.id}')">🗑️</button>` : ''}
       </td>
@@ -353,6 +363,7 @@ function renderProducts(){
         <h3>পণ্য তালিকা</h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           ${isAdmin ? `
+            <button class="btn btn-outline btn-sm" onclick="exportProductsExcel()">⬇️ বর্তমান পণ্য এক্সেলে নামান</button>
             <button class="btn btn-outline btn-sm" onclick="downloadProductDemoExcel()">📥 ডেমো এক্সেল ফাইল</button>
             <button class="btn btn-outline btn-sm" onclick="document.getElementById('excelFileInput').click()">📤 এক্সেল থেকে আপলোড</button>
             <input type="file" id="excelFileInput" accept=".xlsx,.xls" class="hidden" onchange="handleExcelUpload(event)">
@@ -360,7 +371,7 @@ function renderProducts(){
           <button class="btn btn-accent btn-sm" onclick="openProductForm()">+ নতুন পণ্য</button>
         </div>
       </div>
-      ${isAdmin ? `<p style="font-size:12px;color:var(--text-muted);margin:-4px 0 14px;">প্রথমে "ডেমো এক্সেল ফাইল" ডাউনলোড করে সেখানে পণ্যের তথ্য পূরণ করুন, তারপর "এক্সেল থেকে আপলোড" দিয়ে সেই ফাইলটা সিলেক্ট করুন — সব পণ্য একসাথে যোগ হয়ে যাবে।</p>` : ''}
+      ${isAdmin ? `<p style="font-size:12px;color:var(--text-muted);margin:-4px 0 14px;">"বর্তমান পণ্য এক্সেলে নামান" দিয়ে ফাইল নামিয়ে দাম/স্টক ইত্যাদি বদলান, তারপর "এক্সেল থেকে আপলোড" দিন — আইডি (না থাকলে নাম) মিললে পুরোনো পণ্য আপডেট হবে, না মিললে নতুন পণ্য যোগ হবে। কোনো ঘর ফাঁকা থাকলে সেই তথ্য অপরিবর্তিত থাকবে।</p>` : ''}
       <div class="table-wrap"><table><thead><tr>
         <th>আইডি</th><th>পণ্যের নাম</th><th>ক্যাটাগরি</th><th>একক</th>
         ${isAdmin?'<th>ক্রয়মূল্য</th>':''}
@@ -371,16 +382,23 @@ function renderProducts(){
   `;
 }
 
-function downloadProductDemoExcel(){
-  const headers = ['পণ্যের নাম','ক্যাটাগরি','একক (কেজি/গ্রাম/লিটার/পিস)','ক্রয়মূল্য','বিক্রয়মূল্য','স্টক','ন্যূনতম স্টক সতর্কতা'];
-  const example = ['মিনিকেট চাল','খাদ্যশস্য','কেজি',68,78,200,20];
-  const ws = XLSX.utils.aoa_to_sheet([headers, example]);
-  ws['!cols'] = [{wch:26},{wch:16},{wch:22},{wch:12},{wch:12},{wch:10},{wch:16}];
+const XL = {id:'আইডি', name:'পণ্যের নাম', cat:'ক্যাটাগরি', unit:'একক (কেজি/গ্রাম/লিটার/পিস)', cost:'ক্রয়মূল্য', retail:'বিক্রয়মূল্য', stock:'স্টক', min:'ন্যূনতম স্টক সতর্কতা', active:'সক্রিয় (হ্যাঁ/না)'};
+const XL_COLS = [XL.id, XL.name, XL.cat, XL.unit, XL.cost, XL.retail, XL.stock, XL.min, XL.active];
+function writeProductSheet(rows, filename){
+  const ws = XLSX.utils.aoa_to_sheet([XL_COLS, ...rows]);
+  ws['!cols'] = [{wch:8},{wch:28},{wch:16},{wch:22},{wch:12},{wch:12},{wch:10},{wch:16},{wch:16}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'পণ্য তালিকা');
-  XLSX.writeFile(wb, 'avera-mart-product-demo.xlsx');
+  XLSX.writeFile(wb, filename);
 }
-
+function downloadProductDemoExcel(){
+  writeProductSheet([['','মিনিকেট চাল','খাদ্যশস্য','কেজি',68,78,200,20,'হ্যাঁ']], 'avera-mart-product-demo.xlsx');
+}
+function exportProductsExcel(){
+  const rows = CACHE.products.map(p => [p.id, p.name, p.category, p.unit||'কেজি', p.cost, p.retail, p.stock, p.minStock, p.hidden?'না':'হ্যাঁ']);
+  writeProductSheet(rows, `avera-mart-products-${todayStr()}.xlsx`);
+}
+function cellVal(row, key){ const v = row[key]; return (v===undefined || v===null || String(v).trim()==='') ? null : v; }
 function handleExcelUpload(event){
   const file = event.target.files[0];
   if(!file) return;
@@ -388,47 +406,73 @@ function handleExcelUpload(event){
   reader.onload = (e) => {
     try{
       const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(sheet, {defval:''});
-
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {defval:''});
       const products = CACHE.products.slice();
       const settings = {...CACHE.settings};
       const newCategories = [];
-      let added = 0, skipped = 0;
+      const findExisting = (id, name) => {
+        if(id){ const i = products.findIndex(p=>p.id===id); if(i>-1) return i; }
+        if(name){ return products.findIndex(p=>p.name.trim().toLowerCase()===name.toLowerCase()); }
+        return -1;
+      };
+      const planned = rows.map(row => {
+        const id = String(cellVal(row, XL.id) ?? '').trim();
+        const name = String(cellVal(row, XL.name) ?? '').trim();
+        return {row, id, name, idx: findExisting(id, name)};
+      });
+      const stockInUpdates = planned.some(x => x.idx>-1 && cellVal(x.row, XL.stock)!==null);
+      const updateStock = stockInUpdates ? confirm('ফাইলে থাকা পণ্যগুলোর স্টকের সংখ্যাও কি আপডেট করতে চান?\n\nOK = স্টকসহ সব আপডেট\nCancel = শুধু দাম/নাম/ক্যাটাগরি ইত্যাদি আপডেট, স্টক অপরিবর্তিত\n\n(সতর্কতা: ফাইল ডাউনলোডের পর নতুন বিক্রি/ক্রয় হয়ে থাকলে স্টক পুরোনো হয়ে যেতে পারে)') : false;
+      let added = 0, updated = 0, skipped = 0;
+      const isNo = v => ['না','no','n','0','false','hidden'].includes(String(v).trim().toLowerCase());
 
-      rows.forEach(row => {
-        const name = String(row['পণ্যের নাম']||'').trim();
-        if(!name){ skipped++; return; }
-        let category = String(row['ক্যাটাগরি']||'').trim() || 'অন্যান্য';
-        if(!settings.productCategories.includes(category) && !newCategories.includes(category)){
-          newCategories.push(category);
-        }
-        products.push({
-          id: genId('P', products),
-          name,
-          category,
-          unit: String(row['একক (কেজি/গ্রাম/লিটার/পিস)']||row['একক']||'').trim() || 'কেজি',
-          cost: Number(row['ক্রয়মূল্য']||0),
-          retail: Number(row['বিক্রয়মূল্য']||row['খুচরা মূল্য']||0),
-          stock: Number(row['স্টক']||0),
-          minStock: Number(row['ন্যূনতম স্টক সতর্কতা']||5)
-        });
-        added++;
+      planned.forEach(({row, id, name, idx}) => {
+        const cat = cellVal(row, XL.cat);
+        if(cat && !settings.productCategories.includes(String(cat).trim()) && !newCategories.includes(String(cat).trim())) newCategories.push(String(cat).trim());
+        const unit = cellVal(row, XL.unit) ?? cellVal(row, 'একক');
+        const cost = cellVal(row, XL.cost), retail = cellVal(row, XL.retail) ?? cellVal(row, 'খুচরা মূল্য');
+        const stock = cellVal(row, XL.stock), min = cellVal(row, XL.min), active = cellVal(row, XL.active);
+        if(idx>-1){
+          const old = products[idx], ch = {};
+          if(name) ch.name = name;
+          if(cat) ch.category = String(cat).trim();
+          if(unit) ch.unit = String(unit).trim();
+          if(cost!==null) ch.cost = Number(cost);
+          if(retail!==null) ch.retail = Number(retail);
+          if(min!==null) ch.minStock = Number(min);
+          if(updateStock && stock!==null) ch.stock = Number(stock);
+          if(active!==null) ch.hidden = isNo(active);
+          products[idx] = {...old, ...ch};
+          updated++;
+        } else if(name){
+          products.push({
+            id: genId('P', products), name,
+            category: cat ? String(cat).trim() : 'অন্যান্য',
+            unit: unit ? String(unit).trim() : 'কেজি',
+            cost: Number(cost||0), retail: Number(retail||0),
+            stock: Number(stock||0), minStock: Number(min ?? 5),
+            hidden: active!==null ? isNo(active) : false
+          });
+          added++;
+        } else { skipped++; }
       });
 
-      if(added===0){ alert('ফাইলে কোনো বৈধ পণ্যের সারি পাওয়া যায়নি। ডেমো ফাইলের ফরম্যাট অনুযায়ী কলামের নাম ঠিক আছে কিনা যাচাই করুন।'); return; }
-
+      if(added===0 && updated===0){ alert('ফাইলে কোনো বৈধ পণ্যের সারি পাওয়া যায়নি। কলামের নাম ঠিক আছে কিনা যাচাই করুন (ডেমো বা এক্সপোর্ট করা ফাইলের ফরম্যাট অনুযায়ী)।'); event.target.value=''; return; }
       if(newCategories.length){ settings.productCategories = [...settings.productCategories, ...newCategories]; }
       saveCollection('products', products);
       if(newCategories.length) saveSettings(settings);
       renderProducts();
-      alert(`✅ ${added}টি পণ্য সফলভাবে যোগ হয়েছে।${skipped?` (${skipped}টি সারি খালি থাকায় বাদ দেওয়া হয়েছে)`:''}`);
+      alert(`✅ ${updated}টি পণ্য আপডেট এবং ${added}টি নতুন পণ্য যোগ হয়েছে।${skipped?` (${skipped}টি সারি বাদ গেছে)`:''}`);
     }catch(err){
-      alert('ফাইলটি পড়া যায়নি। এটা ঠিক .xlsx ফরম্যাটের ফাইল কিনা এবং ডেমো ফাইলের কলাম কাঠামো ঠিক আছে কিনা যাচাই করুন।');
+      alert('ফাইলটি পড়া যায়নি। এটা ঠিক .xlsx ফরম্যাটের ফাইল কিনা এবং কলাম কাঠামো ঠিক আছে কিনা যাচাই করুন।');
     }
     event.target.value = '';
   };
   reader.readAsArrayBuffer(file);
+}
+function toggleProductHidden(id){
+  const products = CACHE.products.map(p => p.id===id ? {...p, hidden: !p.hidden} : p);
+  saveCollection('products', products);
+  renderProducts();
 }
 
 function openProductForm(id){
@@ -455,6 +499,10 @@ function openProductForm(id){
         <div class="form-field"><label>বিক্রয়মূল্য (৳) — প্রতি এককে</label><input id="f_retail" type="number" value="${p?p.retail:''}"></div>
         <div class="form-field"><label>বর্তমান স্টক (এককে)</label><input id="f_stock" type="number" value="${p?p.stock:0}"></div>
         <div class="form-field"><label>ন্যূনতম স্টক সতর্কতা</label><input id="f_min" type="number" value="${p?p.minStock:5}"></div>
+        <div class="form-field"><label>বিক্রির জন্য চালু?</label>
+          <label style="display:flex;gap:8px;align-items:center;font-weight:400;"><input id="f_active" type="checkbox" ${p&&p.hidden?'':'checked'}> চালু (অর্ডারে দেখাবে)</label>
+          <span class="muted-cell" style="font-size:11.5px;">এখনো কেনা হয়নি এমন পণ্যের টিক তুলে দিন — অর্ডারের সার্চে, লো-স্টক সতর্কতায় ও ইনভেন্টরি রিপোর্টে আসবে না। ক্রয় এন্ট্রি দিলে নিজে থেকেই চালু হয়ে যাবে।</span>
+        </div>
         <div class="form-field span-2">
           <label>পরিমাণ অনুযায়ী মূল্যের ধাপ (ঐচ্ছিক, শুধু রেফারেন্সের জন্য)</label>
           <textarea id="f_tiers" rows="2" placeholder="যেমন: ২ কেজি = ৳৫০, ৫ কেজি = ৳১২০, ১০ কেজি = ৳২৩০">${p?esc(p.priceTiers||''):''}</textarea>
@@ -482,7 +530,8 @@ function saveProduct(id){
     retail: Number(document.getElementById('f_retail').value||0),
     stock: Number(document.getElementById('f_stock').value||0),
     minStock: Number(document.getElementById('f_min').value||0),
-    priceTiers: document.getElementById('f_tiers').value.trim()
+    priceTiers: document.getElementById('f_tiers').value.trim(),
+    hidden: !document.getElementById('f_active').checked
   };
   if(id){
     const idx = products.findIndex(p=>p.id===id);
@@ -565,7 +614,7 @@ function updateOrderStatus(id, newStatus){
     const sign = willBeDelivered ? -1 : 1; // going TO delivered subtracts stock, coming FROM delivered restores it
     orderItems(order).forEach(it => {
       const pIdx = products.findIndex(p=>p.id===it.productId);
-      if(pIdx>-1){ products[pIdx] = {...products[pIdx], stock: Number(products[pIdx].stock) + sign*Number(it.qty)}; }
+      if(pIdx>-1){ products[pIdx] = {...products[pIdx], stock: r3(Number(products[pIdx].stock) + sign*Number(it.qty))}; }
     });
   }
   order.status = newStatus;
@@ -635,7 +684,7 @@ function renderProductSearch(query){
   const box = document.getElementById('searchResults');
   const q = query.trim().toLowerCase();
   if(!q){ box.innerHTML=''; box.classList.remove('open'); return; }
-  const matches = CACHE.products.filter(p => p.name.toLowerCase().includes(q)).slice(0,8);
+  const matches = CACHE.products.filter(p => !p.hidden && p.name.toLowerCase().includes(q)).slice(0,8);
   if(!matches.length){
     box.innerHTML = `<div class="search-empty">কোনো পণ্য পাওয়া যায়নি</div>`;
     box.classList.add('open');
@@ -665,7 +714,15 @@ function addToCart(productId){
 }
 function updateCartQty(productId, qty){
   const it = ORDER_CART.find(x=>x.productId===productId);
-  if(it) it.qty = Math.max(1, Number(qty)||1);
+  if(it){
+    const v = Number(qty)||0;
+    it.qty = Math.max(0.001, it.sub ? v/1000 : v) || 1;
+  }
+  renderCart();
+}
+function setCartUnitMode(productId, sub){
+  const it = ORDER_CART.find(x=>x.productId===productId);
+  if(it){ it.sub = !!sub; }
   renderCart();
 }
 function removeFromCart(productId){
@@ -712,7 +769,8 @@ function renderCart(){
     return `
       <tr>
         <td>${esc(p?p.name:'—')}</td>
-        <td class="cell-center"><input type="number" min="1" value="${it.qty}" style="width:60px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartQty('${it.productId}', this.value)"> <span class="muted-cell">${esc(p?.unit||'কেজি')}</span></td>
+        <td class="cell-center"><input type="number" min="0.001" step="any" value="${it.sub ? r3(it.qty*1000) : r3(it.qty)}" style="width:75px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartQty('${it.productId}', this.value)">
+          ${subUnit(p?.unit||'কেজি') ? `<select onchange="setCartUnitMode('${it.productId}', this.value==='sub')" style="padding:4px;border:1px solid var(--border);border-radius:6px;"><option value="base" ${it.sub?'':'selected'}>${esc(p?.unit||'কেজি')}</option><option value="sub" ${it.sub?'selected':''}>${subUnit(p?.unit||'কেজি')}</option></select>` : `<span class="muted-cell">${esc(p?.unit||'কেজি')}</span>`}</td>
         <td class="cell-center"><input type="number" min="0" value="${it.unitPrice}" style="width:80px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartPrice('${it.productId}', this.value)"></td>
         <td class="cell-num">${money(lineTotal)}</td>
         <td class="cell-center"><button class="icon-btn danger" onclick="removeFromCart('${it.productId}')">🗑️</button></td>
@@ -876,7 +934,7 @@ function savePurchase(){
   };
   purchases.push(data);
   const pIdx = products.findIndex(p=>p.id===productId);
-  if(pIdx>-1){ products[pIdx] = {...products[pIdx], stock: Number(products[pIdx].stock) + qty}; }
+  if(pIdx>-1){ products[pIdx] = {...products[pIdx], hidden:false, stock: r3(Number(products[pIdx].stock) + qty)}; }
   saveCollection('products', products);
   saveCollection('purchases', purchases);
   renderPurchases();
@@ -890,47 +948,58 @@ function deletePurchase(id){
 /* ============================================================
    EXPENSES
    ============================================================ */
+const INCOME_CATEGORIES = ['কোম্পানি কমিশন','রিবেট/ক্যাশব্যাক','অন্যান্য আয়'];
 function renderExpenses(){
   const expenses = CACHE.expenses;
-  let rows = expenses.slice().reverse().map(e => `
+  let rows = expenses.slice().reverse().map(e => {
+    const inc = e.kind==='income';
+    return `
     <tr>
-      <td>${e.id}</td><td>${e.date}</td><td>${esc(e.category)}</td>
-      <td class="cell-num">${money(e.amount)}</td><td>${esc(e.method)}</td><td>${esc(e.approvedBy)}</td>
+      <td>${e.id}</td><td>${e.date}</td>
+      <td>${inc?'<span class="badge badge-paid">আয়</span> ':''}${esc(e.category)}</td>
+      <td class="cell-num" style="${inc?'color:#167A54;':''}">${inc?'+ ':''}${money(e.amount)}</td><td>${esc(e.method)}</td><td>${esc(e.approvedBy)}</td>
       <td class="cell-center"><button class="icon-btn danger" onclick="deleteExpense('${e.id}')">🗑️</button></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   document.getElementById('pageContent').innerHTML = `
     <div class="panel">
-      <div class="panel-head"><h3>খরচ খাতা</h3>
-        <button class="btn btn-accent btn-sm" onclick="openExpenseForm()">+ নতুন খরচ</button>
+      <div class="panel-head"><h3>খরচ ও আয় খাতা</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-outline btn-sm" onclick="openExpenseForm('income')">+ কমিশন / অন্যান্য আয়</button>
+          <button class="btn btn-accent btn-sm" onclick="openExpenseForm()">+ নতুন খরচ</button>
+        </div>
       </div>
       <div class="table-wrap"><table><thead><tr>
-        <th>আইডি</th><th>তারিখ</th><th>ক্যাটাগরি</th><th>পরিমাণ</th><th>মাধ্যম</th><th>অনুমোদনকারী</th><th>একশন</th>
-      </tr></thead><tbody>${rows || `<tr><td colspan="7" class="empty-state">কোনো খরচ যোগ করা হয়নি</td></tr>`}</tbody></table></div>
+        <th>আইডি</th><th>তারিখ</th><th>ক্যাটাগরি</th><th>পরিমাণ</th><th>মাধ্যম</th><th>অনুমোদনকারী / উৎস</th><th>একশন</th>
+      </tr></thead><tbody>${rows || `<tr><td colspan="7" class="empty-state">কোনো এন্ট্রি যোগ করা হয়নি</td></tr>`}</tbody></table></div>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">কোম্পানির কাছ থেকে পাওয়া কমিশন "আয়" হিসেবে যোগ হয় এবং লাভ-ক্ষতির হিসাবে নিট লাভে যোগ হয়ে যায়।</p>
     </div>
     <div id="modalHolder"></div>
   `;
 }
-function openExpenseForm(){
+function openExpenseForm(kind){
+  const inc = kind==='income';
+  const cats = inc ? INCOME_CATEGORIES : CACHE.settings.expenseCategories;
   document.getElementById('modalHolder').innerHTML = `
     <div class="panel">
-      <h3>নতুন খরচ এন্ট্রি</h3>
+      <h3>${inc?'কমিশন / আয় এন্ট্রি':'নতুন খরচ এন্ট্রি'}</h3>
       <div class="form-grid">
         <div class="form-field"><label>ক্যাটাগরি</label>
-          <select id="e_cat">${CACHE.settings.expenseCategories.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
+          <select id="e_cat">${cats.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
         </div>
         <div class="form-field"><label>পরিমাণ (৳)</label><input id="e_amount" type="number" value="0"></div>
-        <div class="form-field"><label>পেমেন্ট মাধ্যম</label>
+        <div class="form-field"><label>${inc?'টাকা পাওয়ার মাধ্যম':'পেমেন্ট মাধ্যম'}</label>
           <select id="e_method"><option>Cash</option><option>bKash</option><option>Bank</option></select>
         </div>
-        <div class="form-field"><label>অনুমোদনকারী</label><input id="e_approved"></div>
+        <div class="form-field"><label>${inc?'কোম্পানির নাম / বিবরণ':'অনুমোদনকারী'}</label><input id="e_approved"></div>
       </div>
       <div style="margin-top:16px;display:flex;gap:10px;">
-        <button class="btn btn-primary" onclick="saveExpense()">সংরক্ষণ করুন</button>
+        <button class="btn btn-primary" onclick="saveExpense('${inc?'income':''}')">সংরক্ষণ করুন</button>
         <button class="btn btn-outline" onclick="renderExpenses()">বাতিল</button>
       </div>
     </div>`;
 }
-function saveExpense(){
+function saveExpense(kind){
   const expenses = CACHE.expenses.slice();
   const data = {
     id: genId('EXP-', expenses), date: todayStr(),
@@ -939,6 +1008,7 @@ function saveExpense(){
     method: document.getElementById('e_method').value,
     approvedBy: document.getElementById('e_approved').value.trim()
   };
+  if(kind==='income') data.kind = 'income';
   expenses.push(data);
   saveCollection('expenses', expenses);
   renderExpenses();
@@ -1063,7 +1133,7 @@ function loadReturnOrder(){
       <td>${esc(p?p.name:'—')}</td>
       <td class="cell-center">${it.qty}</td>
       <td class="cell-num">${money(it.unitPrice)}</td>
-      <td class="cell-center"><input type="number" min="0" max="${it.qty}" value="0" id="ret_qty_${idx}" style="width:70px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;"></td>
+      <td class="cell-center"><input type="number" min="0" step="any" max="${it.qty}" value="0" id="ret_qty_${idx}" style="width:70px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;"></td>
     </tr>`;
   }).join('');
   holder.innerHTML = `
@@ -1104,7 +1174,7 @@ function submitReturn(orderId){
       it.qty = Number(it.qty) - retQty;
       if(order.status==='Delivered'){
         const pIdx = products.findIndex(p=>p.id===it.productId);
-        if(pIdx>-1){ products[pIdx] = {...products[pIdx], stock: Number(products[pIdx].stock)+retQty}; }
+        if(pIdx>-1){ products[pIdx] = {...products[pIdx], stock: r3(Number(products[pIdx].stock)+retQty)}; }
       }
     }
   });
@@ -1187,7 +1257,7 @@ function renderInventory(){
   const returns = CACHE.returns;
   const month = todayStr().slice(0,7);
 
-  const rows = products.map(p=>{
+  const rows = products.filter(p=>!p.hidden).map(p=>{
     const purchasedThisMonth = purchases.filter(pu=>pu.productId===p.id && pu.date && pu.date.slice(0,7)===month)
       .reduce((s,pu)=>s+Number(pu.qty||0),0);
     const soldThisMonth = orders.filter(o=>o.status==='Delivered' && o.date && o.date.slice(0,7)===month)
@@ -1209,7 +1279,13 @@ function renderInventory(){
       <div class="value">${money(totalValue)}</div>
     </div>` : ''}
     <div class="panel">
-      <h3>মাসিক ইনভেন্টরি রিপোর্ট — ${month}</h3>
+      <div class="panel-head" style="flex-wrap:wrap;gap:8px;">
+        <h3>মাসিক ইনভেন্টরি রিপোর্ট — ${month}</h3>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-accent btn-sm" onclick="printStockReport(false)">🖨️ স্টক রিপোর্ট প্রিন্ট (সব পণ্য)</button>
+          <button class="btn btn-outline btn-sm" onclick="printStockReport(true)">🖨️ শুধু স্টকে আছে এমন পণ্য</button>
+        </div>
+      </div>
       <p style="font-size:12.5px;color:var(--text-muted);">এই মাসের শুরুর স্টক, ক্রয়, বিক্রয়, রিটার্ন ও বর্তমান (ক্লোজিং) স্টক এক নজরে — ফিজিক্যাল গণনার সাথে মিলিয়ে দেখতে ব্যবহার করুন। কোনো পার্থক্য থাকলে বুঝবেন কোথাও এন্ট্রি বাদ পড়েছে বা স্টক ক্ষতিগ্রস্ত/চুরি হয়েছে।</p>
       <div class="table-wrap"><table><thead><tr>
         <th>পণ্য</th><th>মাসের শুরুর স্টক</th><th>+ক্রয়</th><th>−বিক্রয়</th><th>+রিটার্ন</th><th>=বর্তমান স্টক</th>
@@ -1345,8 +1421,9 @@ function renderProfitLoss(){
   const revenue = orders.reduce((s,o)=>s+Number(o.total||0),0);
   const cogs = orders.reduce((s,o)=> s + orderItems(o).reduce((s2,it)=>{ const p=products.find(p=>p.id===it.productId); return s2+(p?p.cost:0)*Number(it.qty||0); },0), 0);
   const grossProfit = revenue - cogs;
-  const totalExpenses = expenses.reduce((s,e)=>s+Number(e.amount||0),0);
-  const netProfit = grossProfit - totalExpenses;
+  const totalExpenses = expenses.filter(e=>e.kind!=='income').reduce((s,e)=>s+Number(e.amount||0),0);
+  const otherIncome = expenses.filter(e=>e.kind==='income').reduce((s,e)=>s+Number(e.amount||0),0);
+  const netProfit = grossProfit + otherIncome - totalExpenses;
   const dividendPool = netProfit>0 ? netProfit * (settings.dividendPercent/100) : 0;
   const retainedShare = netProfit>0 ? netProfit - dividendPool : 0;
   const retainedPercent = 100 - settings.dividendPercent;
@@ -1361,6 +1438,7 @@ function renderProfitLoss(){
           <tr><td>মোট বিক্রয় (ডেলিভারড অর্ডার)</td><td class="cell-num">${money(revenue)}</td></tr>
           <tr><td>বিক্রিত পণ্যের ক্রয়মূল্য (COGS)</td><td class="cell-num">${money(cogs)}</td></tr>
           <tr><td><b>গ্রস প্রফিট</b></td><td class="cell-num"><b>${money(grossProfit)}</b></td></tr>
+          <tr><td>কমিশন / অন্যান্য আয়</td><td class="cell-num">+ ${money(otherIncome)}</td></tr>
           <tr><td>মোট পরিচালন খরচ</td><td class="cell-num">${money(totalExpenses)}</td></tr>
         </table>
         <div class="invoice-total-row"><span>নিট লাভ</span><span>${money(netProfit)}</span></div>
@@ -1421,7 +1499,7 @@ function drawInvoice(){
     const p = CACHE.products.find(x=>x.id===it.productId);
     return `<tr>
       <td>${esc(p?p.name:'—')}</td>
-      <td class="cell-num">${it.qty}</td><td class="cell-num">${money(it.unitPrice)}</td><td class="cell-num">${money(it.qty*it.unitPrice)}</td>
+      <td class="cell-num">${fmtQty(it.qty, p?.unit)}</td><td class="cell-num">${money(it.unitPrice)}${p?.unit?`/${esc(p.unit)}`:''}</td><td class="cell-num">${money(Math.round(it.qty*it.unitPrice*100)/100)}</td>
     </tr>`;
   }).join('');
 
@@ -1450,6 +1528,10 @@ function drawInvoice(){
       <div class="invoice-total-row"><span>সর্বমোট</span><span>${money(o.total)}</span></div>
       <p style="font-size:11.5px;color:var(--text-muted);margin-top:10px;">পেমেন্ট স্ট্যাটাস: ${PAY_BN[o.paymentStatus]||o.paymentStatus} — পরিশোধিত ${money(o.paidAmount!=null?o.paidAmount:(o.paymentStatus==='Paid'?o.total:0))}${orderDue(o)>0 ? `, বকেয়া ${money(orderDue(o))}` : ''}</p>
       ${o.paymentMethod ? `<p style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">পেমেন্টের ধরন: ${esc((PAY_METHODS.find(m=>m.value===o.paymentMethod)||{}).label || o.paymentMethod)}${o.transactionRef ? ` — ট্রানজেকশন আইডি/অ্যাকাউন্ট: ${esc(o.transactionRef)}` : ''}</p>` : ''}
+      <div class="invoice-sign">
+        <div><span class="sign-line"></span>ক্রেতার স্বাক্ষর</div>
+        <div><span class="sign-line"></span>বিক্রেতার স্বাক্ষর</div>
+      </div>
     </div>
     <div class="invoice-actions">
       <button class="btn btn-outline btn-sm" onclick="printInvoice(false)">🖨️ সাধারণ প্রিন্ট</button>
@@ -1502,7 +1584,7 @@ function shareWhatsapp(orderId){
   const items = orderItems(o);
   const lines = items.map(it=>{
     const p = CACHE.products.find(x=>x.id===it.productId);
-    return `${p?p.name:''} x ${it.qty}`;
+    return `${p?p.name:''} x ${fmtQty(it.qty, p?.unit)}`;
   }).join('\n');
   const text = `Avera Mart ইনভয়েস ${o.id}\nকাস্টমার: ${o.customerName}\n${lines}\nসর্বমোট: ৳${o.total}\nধন্যবাদ প্রকৃতির ছোঁয়া, নিরাপদ আস্থা — Avera Mart থেকে কেনাকাটার জন্য।`;
   const phone = (o.phone||'').replace(/\D/g,'');
@@ -1571,7 +1653,12 @@ function renderSettings(){
       <div class="panel">
         <h3>ডেটা ব্যাকআপ</h3>
         <p style="font-size:13px;color:var(--text-muted);">সব পণ্য, অর্ডার, ক্রয়, খরচ, বকেয়া, রিটার্ন ও শেয়ারহোল্ডার তথ্যের একটা কপি আপনার ফোন/কম্পিউটারে ডাউনলোড করে রাখুন — সপ্তাহে অন্তত একবার করার অভ্যাস রাখা ভালো।</p>
-        <button class="btn btn-primary btn-sm" onclick="downloadBackup()">📥 ব্যাকআপ ডাউনলোড করুন</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="downloadBackup()">📥 ব্যাকআপ ডাউনলোড করুন</button>
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('restoreFileInput').click()">📤 ব্যাকআপ থেকে ডেটা ফিরিয়ে আনুন</button>
+          <input type="file" id="restoreFileInput" accept=".json,application/json" class="hidden" onchange="restoreBackup(event)">
+        </div>
+        <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">রিস্টোর করলে বর্তমান সব ডেটা ব্যাকআপ ফাইলের ডেটা দিয়ে প্রতিস্থাপিত হবে (পিন অপরিবর্তিত থাকবে)। রিস্টোরের আগে বর্তমান ডেটার একটা ব্যাকআপ নিজে থেকেই ডাউনলোড হয়ে যাবে।</p>
       </div>
     </div>
   `;
@@ -1645,4 +1732,66 @@ function removeExpenseCategory(name){
   settings.expenseCategories = settings.expenseCategories.filter(c=>c!==name);
   saveSettings(settings);
   renderSettings();
+}
+
+
+/* ============================================================
+   STOCK REPORT PRINT (for physical month-end stock counting)
+   ============================================================ */
+function printStockReport(onlyInStock){
+  const list = CACHE.products.filter(p => !p.hidden && (!onlyInStock || Number(p.stock) > 0))
+    .slice().sort((a,b) => String(a.category).localeCompare(String(b.category),'bn') || String(a.name).localeCompare(String(b.name),'bn'));
+  if(!list.length){ alert('প্রিন্ট করার মতো কোনো পণ্য নেই।'); return; }
+  let body = '', lastCat = null, n = 0;
+  list.forEach(p => {
+    if(p.category !== lastCat){ lastCat = p.category; body += `<tr class="sp-cat"><td colspan="7">${esc(p.category||'অন্যান্য')}</td></tr>`; }
+    n++;
+    body += `<tr><td>${n}</td><td>${esc(p.name)}</td><td>${esc(p.unit||'কেজি')}</td><td class="sp-num">${r3(p.stock)}</td><td class="sp-blank"></td><td class="sp-blank"></td><td class="sp-blank"></td></tr>`;
+  });
+  const d = new Date();
+  const dateStr = `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+  document.getElementById('printArea').innerHTML = `
+    <div class="stock-print">
+      <div class="sp-head">
+        <img src="assets/logo.jpg" alt="">
+        <div><h3>Avera Mart — স্টক রিপোর্ট</h3>
+        <div>${esc(CACHE.settings.businessAddress||'')}</div>
+        <div>তারিখ: ${dateStr} · ${onlyInStock?'শুধু স্টকে থাকা পণ্য':'সব চালু পণ্য'} · মোট ${list.length}টি</div></div>
+      </div>
+      <table>
+        <thead><tr><th>ক্র.</th><th>পণ্যের নাম</th><th>একক</th><th>সফটওয়্যার স্টক</th><th>ফিজিক্যাল গণনা</th><th>পার্থক্য</th><th>মন্তব্য</th></tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+      <div class="sp-sign"><span>গণনাকারী: ____________</span><span>যাচাইকারী: ____________</span><span>অনুমোদন: ____________</span></div>
+    </div>`;
+  document.body.classList.remove('thermal');
+  window.print();
+}
+
+/* ============================================================
+   RESTORE FROM BACKUP (.json made by downloadBackup)
+   ============================================================ */
+function restoreBackup(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try{
+      const data = JSON.parse(e.target.result);
+      const labels = {products:'পণ্য', orders:'অর্ডার', purchases:'ক্রয়', expenses:'খরচ/আয়', returns:'রিটার্ন', shareholders:'শেয়ারহোল্ডার', contributions:'জমা'};
+      const keys = Object.keys(labels).filter(k => Array.isArray(data[k]));
+      if(!keys.length) throw new Error('not a backup');
+      const summary = keys.map(k => `${labels[k]}: ${data[k].length}টি`).join(', ');
+      if(!confirm(`ব্যাকআপ ফাইলে আছে — ${summary}\n\nবর্তমান সব ডেটা এই ফাইলের ডেটা দিয়ে প্রতিস্থাপিত হবে। এগিয়ে যাবেন?\n(এখনকার ডেটার একটা ব্যাকআপ আগে নিজে থেকেই ডাউনলোড হবে)`)){ event.target.value=''; return; }
+      downloadBackup();
+      keys.forEach(k => saveCollection(k, data[k]));
+      if(data.settings && typeof data.settings === 'object') saveSettings({...CACHE.settings, ...data.settings});
+      renderSettings();
+      alert('✅ ডেটা সফলভাবে ফিরিয়ে আনা হয়েছে।');
+    }catch(err){
+      alert('এটা সঠিক ব্যাকআপ ফাইল নয়। "ব্যাকআপ ডাউনলোড করুন" বাটন থেকে নামানো .json ফাইল সিলেক্ট করুন।');
+    }
+    event.target.value = '';
+  };
+  reader.readAsText(file);
 }
