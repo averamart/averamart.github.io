@@ -134,7 +134,7 @@ function onCloudUpdate(){
     // live re-render current page so every device sees updates instantly
     const renderers = {
       dashboard: renderDashboard, products: renderProducts, orders: renderOrders,
-      purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing,
+      purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck,
       invoice: renderInvoice, settings: renderSettings
     };
     (renderers[currentPage] || renderDashboard)();
@@ -360,6 +360,7 @@ const NAV_ITEMS = [
   {key:'shareholders', label:'শেয়ারহোল্ডার', icon:'💼', roles:['admin']},
   {key:'profitloss', label:'লাভ-ক্ষতি', icon:'📊', roles:['admin']},
   {key:'closing', label:'মাস ক্লোজিং ও লক', icon:'🔒', roles:['admin']},
+  {key:'stockcheck', label:'স্টক মূল্য যাচাই', icon:'🧮', roles:['admin']},
   {key:'invoice', label:'ইনভয়েস', icon:'🧾', roles:['admin','manager','delivery']},
   {key:'settings', label:'সেটিংস', icon:'⚙️', roles:['admin']}
 ];
@@ -398,7 +399,7 @@ function go(page){
   document.getElementById('pageTitle').textContent = titles[page] || '';
   const renderers = {
     dashboard: renderDashboard, products: renderProducts, orders: renderOrders,
-    purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing,
+    purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck,
     invoice: renderInvoice, settings: renderSettings
   };
   (renderers[page] || renderDashboard)();
@@ -651,6 +652,128 @@ function renderClosing(){
 }
 
 /* ============================================================
+   STOCK VALUE CHECK — স্টক মূল্য যাচাই (ভাউচার/ক্রয় খাতার সাথে মিলিয়ে দেখার জন্য)
+   ============================================================ */
+let SC_Q = '', SC_VOUCHER = '';
+function stockCheckData(){
+  const lastBuy = {};
+  CACHE.purchases.slice().sort((a,b)=> String(a.date).localeCompare(String(b.date))).forEach(pu => { if(pu.productId && Number(pu.qty)>0) lastBuy[pu.productId] = Number(pu.totalCost||0)/Number(pu.qty); });
+  const rows = CACHE.products.map(p => {
+    const st = Number(p.stock||0), cost = Number(p.cost||0), retail = Number(p.retail||0);
+    return {p, st, cost, retail, vCost: st>0 ? st*cost : 0, vRetail: st>0 ? st*retail : 0, last: lastBuy[p.id]};
+  });
+  const A = {
+    zeroCost: rows.filter(r => r.st>0 && !(r.cost>0)),
+    zeroRetail: rows.filter(r => r.st>0 && !(r.retail>0)),
+    negative: rows.filter(r => r.st<0),
+    belowCost: rows.filter(r => r.st>0 && r.retail>0 && r.cost>0 && r.retail<r.cost),
+    hiddenStock: rows.filter(r => r.st>0 && r.p.hidden),
+    drift: rows.filter(r => r.st>0 && r.last>0 && r.cost>0 && Math.abs(r.last-r.cost)/r.cost > 0.05)
+  };
+  // ---- ক্রয় খাতা থেকে স্টক মূল্যে পৌঁছানোর ধাপ (bridge) ----
+  const idx = moveIndex();
+  const buyAgg = {};
+  CACHE.purchases.forEach(pu => { if(!pu.productId) return; const a = buyAgg[pu.productId] || (buyAgg[pu.productId] = {q:0,c:0}); a.q += Number(pu.qty||0); a.c += Number(pu.totalCost||0); });
+  const B = {A:0, sold:0, diff:0, logged:0, untracked:0, neg:0};
+  const mism = [];
+  rows.forEach(r => {
+    const mv = idx[r.p.id] || {}; const T = {P:0,S:0,R:0,A:0};
+    Object.keys(mv).forEach(m => { T.P+=mv[m].P; T.S+=mv[m].S; T.R+=mv[m].R; T.A+=mv[m].A; });
+    const ba = buyAgg[r.p.id]; const avg = (ba && ba.q>0) ? ba.c/ba.q : r.cost;
+    const tracked = T.P - T.S + T.R;
+    const U = r.st - (tracked + T.A);
+    B.A += ba ? ba.c : 0;
+    B.sold += (T.S - T.R) * avg;
+    B.diff += tracked * (r.cost - avg);
+    B.logged += T.A * r.cost;
+    B.untracked += U * r.cost;
+    if(r.st < 0) B.neg += -r.st * r.cost;     // মাইনাস স্টক মোটে ধরা হয় না
+    r.U = U; r.expected = r3(tracked + T.A); r.T = T;
+    if(Math.abs(U) > 0.0005) mism.push(r);
+  });
+  Object.keys(B).forEach(k => B[k] = r2(B[k]));
+  return {rows, A, B, mism, totCost: r2(rows.reduce((t,r)=>t+r.vCost,0)), totRetail: r2(rows.reduce((t,r)=>t+r.vRetail,0)), count: rows.filter(r=>r.st>0).length,
+          buyTotal: r2(CACHE.purchases.reduce((t,pu)=>t+Number(pu.totalCost||0),0))};
+}
+function scRowsHtml(d){
+  const q = SC_Q.trim().toLowerCase();
+  const list = d.rows.filter(r => r.st!==0 && (!q || String(r.p.name).toLowerCase().includes(q) || String(r.p.id).toLowerCase().includes(q))).sort((a,b)=>b.vCost-a.vCost);
+  return list.map(r => `<tr style="${r.p.hidden?'opacity:.7;':''}">
+    <td>${esc(r.p.name)}${r.p.hidden?' <span class="badge badge-hidden">লুকানো</span>':''}</td>
+    <td class="cell-num">${fmtStock(r.st, r.p)}</td>
+    <td class="cell-num">${money(r.cost)}</td>
+    <td class="cell-num">${money(r2(r.vCost))}</td>
+    <td class="cell-num">${money(r.retail)}</td>
+    <td class="cell-num">${money(r2(r.vRetail))}</td>
+  </tr>`).join('') || '<tr><td colspan="6" class="empty-state">কোনো পণ্য নেই</td></tr>';
+}
+function onScSearch(){ SC_Q = document.getElementById('scSearch').value; document.getElementById('scBody').innerHTML = scRowsHtml(stockCheckData()); }
+function onScVoucher(){
+  SC_VOUCHER = document.getElementById('scVoucher').value;
+  const d = stockCheckData(), v = Number(SC_VOUCHER||0);
+  document.getElementById('scDiff').innerHTML = v>0 ? (Math.abs(d.buyTotal - v) < 1
+    ? `<span style="color:#167A54;">✅ ক্রয় খাতার মোট ${money(d.buyTotal)} — ভাউচারের সাথে মিলে গেছে।</span>`
+    : `<span style="color:#B3261E;">⚠️ ক্রয় খাতার মোট ${money(d.buyTotal)}, ভাউচারের মোট ${money(v)} — পার্থক্য <b>${money(r2(Math.abs(d.buyTotal - v)))}</b> (${d.buyTotal>v?'ক্রয় খাতায় বেশি':'ক্রয় খাতায় কম'})। ক্রয় খাতার এন্ট্রিগুলো ভাউচারের সাথে একটা একটা মিলিয়ে দেখুন।</span>`) : '';
+}
+function anomalyBlock(title, list, hint){
+  if(!list.length) return '';
+  return `<div class="flash warn" style="margin-bottom:10px;"><b>${title} (${list.length}টি)</b><br>${list.slice(0,12).map(r=>esc(r.p.name)).join('، ')}${list.length>12?' ...':''}<br><span style="font-size:12px;">${hint}</span></div>`;
+}
+function renderStockCheck(){
+  if(!isAdmin()){ go('dashboard'); return; }
+  const d = stockCheckData(), A = d.A;
+  const anomalies =
+    anomalyBlock('ক্রয়মূল্য ০ বা ফাঁকা, কিন্তু স্টক আছে', A.zeroCost, 'এই পণ্যগুলোর স্টকের মূল্য ০ ধরা হচ্ছে — মোট ক্রয়মূল্যের হিসাব কম আসবে। পণ্য তালিকা থেকে ক্রয়মূল্য বসান।') +
+    anomalyBlock('বিক্রয়মূল্য ০, কিন্তু স্টক আছে', A.zeroRetail, 'বিক্রয়মূল্যের হিসাব কম আসবে।') +
+    anomalyBlock('ঋণাত্মক (মাইনাস) স্টক', A.negative, 'বিক্রি হয়েছে কিন্তু ক্রয় এন্ট্রি দেওয়া হয়নি — ক্রয় খাতায় এন্ট্রি দিন।') +
+    anomalyBlock('বিক্রয়মূল্য ক্রয়মূল্যের চেয়ে কম', A.belowCost, 'দাম উল্টো বসে গেছে কিনা দেখুন।') +
+    anomalyBlock('লুকানো অবস্থায় স্টক আছে', A.hiddenStock, 'এগুলোর মূল্য মোটের মধ্যে ধরা আছে, কিন্তু ইনভেন্টরি রিপোর্টের তালিকায় দেখা যায় না।') +
+    anomalyBlock('পণ্যের ক্রয়মূল্য আর সর্বশেষ ক্রয়ের গড় খরচ মিলছে না (৫%-এর বেশি পার্থক্য)', A.drift, 'ভাউচারে দাম বদলেছে কিন্তু পণ্য তালিকায় ক্রয়মূল্য পুরোনো রয়ে গেছে — এতে স্টকের মূল্য ভাউচারের সাথে মিলবে না। পণ্য তালিকায় ক্রয়মূল্য আপডেট করুন।');
+  document.getElementById('pageContent').innerHTML = `
+    <div class="grid grid-2" style="margin-bottom:16px;">
+      <div class="stat-card"><div class="label">মোট মজুত মালের মূল্য — ক্রয়মূল্যে</div><div class="value">${money(d.totCost)}</div><div class="sub">স্টকে আছে ${d.count}টি পণ্য</div></div>
+      <div class="stat-card"><div class="label">মোট মজুত মালের মূল্য — বিক্রয়মূল্যে</div><div class="value">${money(d.totRetail)}</div><div class="sub">সম্ভাব্য লাভ: ${money(r2(d.totRetail - d.totCost))}</div></div>
+    </div>
+    <div class="panel">
+      <h3>ভাউচারের সাথে মেলান</h3>
+      <p style="font-size:12.5px;color:var(--text-muted);">ড্যাশবোর্ডের স্টক মূল্য = প্রতিটা পণ্যের <b>বর্তমান স্টক × দাম</b>। ভাউচারের টাকা হলো <b>কেনার সময়ের মোট খরচ</b> — এর মধ্যে যা বিক্রি হয়ে গেছে তা ধরা নেই, তাই দুটো হুবহু এক হওয়ার কথা না। মেলাতে হলে: (১) ক্রয় খাতার মোট খরচ ভাউচারের মোটের সমান কিনা দেখুন, (২) নিচের তালিকায় ক্রয়মূল্যে স্টক মূল্য দেখুন (ক্রয়মূল্যের হিসাবই ভাউচারের সাথে তুলনীয়, বিক্রয়মূল্যের নয়)।</p>
+      <div class="form-grid">
+        <div class="form-field"><label>ভাউচারগুলোর মোট যোগফল (৳)</label><input id="scVoucher" type="number" placeholder="যেমন 203103" value="${esc(SC_VOUCHER)}" oninput="onScVoucher()"></div>
+        <div class="form-field"><label>ক্রয় খাতার মোট খরচ (সব এন্ট্রি)</label><div class="stat-card" style="padding:10px 14px;"><div class="value" style="font-size:20px;">${money(d.buyTotal)}</div><div class="sub">${CACHE.purchases.length}টি এন্ট্রি</div></div></div>
+      </div>
+      <p id="scDiff" style="font-size:13.5px;margin-top:10px;"></p>
+    </div>
+    <div class="panel">
+      <h3>ক্রয় খাতা থেকে স্টক মূল্য — ধাপে ধাপে হিসাব</h3>
+      <p style="font-size:12.5px;color:var(--text-muted);">ক্রয় খাতার মোট খরচ থেকে শুরু করে কোন কারণে কত টাকা বাড়ছে/কমছে, নিচে দেখুন। শেষ সংখ্যা ড্যাশবোর্ডের স্টক মূল্যের সমান।</p>
+      <table>
+        <tr><td>ক্রয় খাতার মোট খরচ (ভাউচারের টাকা)</td><td class="cell-num">${money(d.B.A)}</td></tr>
+        <tr><td>− যা বিক্রি হয়ে গেছে (ক্রয়দামে, রিটার্ন বাদে)</td><td class="cell-num">− ${money(d.B.sold)}</td></tr>
+        <tr><td>± পণ্য তালিকার ক্রয়মূল্য আর ভাউচারের দামের পার্থক্য</td><td class="cell-num">${d.B.diff>=0?'+ ':'− '}${money(Math.abs(d.B.diff))}</td></tr>
+        <tr><td>+ পণ্য তালিকা/এক্সেল থেকে হাতে বসানো স্টক (সমন্বয়, প্রারম্ভিক স্টক)</td><td class="cell-num">${d.B.logged>=0?'+ ':'− '}${money(Math.abs(d.B.logged))}</td></tr>
+        <tr><td>+ <b>ক্রয় খাতায় এন্ট্রি ছাড়াই যে স্টক আছে</b> (আগে হাতে বসানো, রেকর্ড নেই)</td><td class="cell-num">${d.B.untracked>=0?'+ ':'− '}${money(Math.abs(d.B.untracked))}</td></tr>
+        ${d.B.neg ? `<tr><td>+ মাইনাস স্টকের পণ্য মোটে ধরা হয় না</td><td class="cell-num">${money(d.B.neg)}</td></tr>` : ''}
+      </table>
+      <div class="invoice-total-row"><span>= মোট স্টক মূল্য (ক্রয়মূল্যে)</span><span>${money(d.totCost)}</span></div>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">যে লাইনে সবচেয়ে বড় সংখ্যা সেটাই পার্থক্যের মূল কারণ।</p>
+    </div>
+    ${d.mism.length ? `<div class="panel"><h3>যেসব পণ্যের স্টক ক্রয়-বিক্রয়ের রেকর্ডের সাথে মিলছে না</h3>
+      <p style="font-size:12.5px;color:var(--text-muted);">"রেকর্ড অনুযায়ী" = ক্রয় − বিক্রয় + রিটার্ন + লগ করা সমন্বয়। "পার্থক্য" মানে এই পরিমাণ স্টক রেকর্ড ছাড়া আছে (পণ্য খোলার সময় বা এক্সেল/পণ্য তালিকা থেকে বসানো)। যদি ভাউচারে এই মাল কেনা হয়ে থাকে, তাহলে ক্রয় খাতায় এন্ট্রি দিন — অথবা স্টক ভুল থাকলে পণ্য তালিকায় সঠিক করুন।</p>
+      <div class="table-wrap"><table><thead><tr><th>পণ্য</th><th>বর্তমান স্টক</th><th>রেকর্ড অনুযায়ী</th><th>পার্থক্য</th><th>মূল্য (ক্রয়)</th></tr></thead><tbody>
+      ${d.mism.slice().sort((a,b)=>Math.abs(b.U*b.cost)-Math.abs(a.U*a.cost)).slice(0,40).map(r=>`<tr><td>${esc(r.p.name)}</td><td class="cell-num">${fmtStock(r.st,r.p)}</td><td class="cell-num">${r.expected} ${esc(r.p.unit||'কেজি')}</td><td class="cell-num"><b>${r3(r.U)}</b></td><td class="cell-num">${money(r2(r.U*r.cost))}</td></tr>`).join('')}
+      </tbody></table></div>
+      ${d.mism.length>40 ? `<p class="muted-cell">আরও ${d.mism.length-40}টি আছে (বড় পার্থক্যগুলো আগে দেখানো হয়েছে)।</p>` : ''}</div>` : ''}
+    ${anomalies ? `<div class="panel"><h3>সম্ভাব্য সমস্যা</h3>${anomalies}</div>` : `<div class="flash">✅ স্টক বা দামের ডেটায় কোনো স্পষ্ট অসঙ্গতি পাওয়া যায়নি।</div>`}
+    <div class="panel">
+      <h3>পণ্যভিত্তিক স্টক মূল্য</h3>
+      <div class="toolbar"><input type="search" id="scSearch" placeholder="🔍 পণ্যের নাম / আইডি" value="${esc(SC_Q)}" oninput="onScSearch()"></div>
+      <div class="table-wrap"><table><thead><tr><th>পণ্য</th><th>স্টক</th><th>ক্রয়মূল্য/একক</th><th>স্টক মূল্য (ক্রয়)</th><th>বিক্রয়মূল্য/একক</th><th>স্টক মূল্য (বিক্রয়)</th></tr></thead>
+      <tbody id="scBody">${scRowsHtml(d)}</tbody></table></div>
+    </div>`;
+  onScVoucher();
+}
+
+/* ============================================================
    DASHBOARD
    ============================================================ */
 function renderDashboard(){
@@ -669,8 +792,8 @@ function renderDashboard(){
   const pending = orders.filter(o=>o.status==='Pending' || o.status==='Processing');
   const st = stockTotals();
   const stockCard = session.role==='admin'
-    ? `<div class="stat-card clickable" onclick="go('inventory')"><div class="label">মোট মজুত মালের মূল্য (ক্রয়মূল্যে)</div><div class="value">${money(st.cost)}</div><div class="sub">বিক্রয়মূল্যে: ${money(st.retail)} · স্টকে আছে ${st.count}টি পণ্য</div></div>`
-    : `<div class="stat-card clickable" onclick="go('inventory')"><div class="label">মোট মজুত মালের মূল্য (বিক্রয়মূল্যে)</div><div class="value">${money(st.retail)}</div><div class="sub">স্টকে আছে ${st.count}টি পণ্য</div></div>`;
+    ? `<div class="stat-card clickable" onclick="go('stockcheck')"><div class="label">মোট মজুত মালের মূল্য (ক্রয়মূল্যে)</div><div class="value">${money(st.cost)}</div><div class="sub">বিক্রয়মূল্যে: ${money(st.retail)} · স্টকে আছে ${st.count}টি পণ্য</div></div>`
+    : `<div class="stat-card clickable" onclick="go('inventory')"><div class="label">মোট মজুত মালের মূল্য (বিক্রয়মূল্যে)</div><div class="value">${money(st.retail)}</div><div class="sub">স্টকে আছে ${st.count}টি পণ্য · এটি বিক্রয়মূল্যের হিসাব, ক্রয়ের ভাউচারের (ক্রয়মূল্য) সাথে মিলবে না</div></div>`;
   const hiddenCount = products.filter(p=>p.hidden).length;
 
   let cards = `
@@ -2589,7 +2712,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '২.৫';
+const APP_VERSION = '২.৭';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{
