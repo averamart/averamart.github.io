@@ -226,10 +226,12 @@ const UNIT_FAMILY = {
 };
 function subInfo(p){
   if(!p) return null;
+  const fromText = parsePackUnit(p.unit);          // "৫০০ গ্রাম", "১ কেজি" ইত্যাদি লেখা থেকেই হিসাব — এটাই সঠিক
+  if(fromText) return fromText;
   if(Number(p.packSize)>0) return {label: p.packLabel || 'গ্রাম', factor: Number(p.packSize), pack:true};
   const f = UNIT_FAMILY[p.unit];
   if(f) return {...f};
-  return parsePackUnit(p.unit);
+  return null;
 }
 // Understands units typed as text such as "৫০০ গ্রাম", "500g", "১ কেজি", "২৫০ মি.লি.", "১ লিটার", "১২ পিস"
 function parsePackUnit(unit){
@@ -954,6 +956,7 @@ function saveProduct(id){
     cost: isAdmin ? per(Number(document.getElementById('f_cost').value||0)) : (products.find(p=>p.id===id)?.cost || 0),
     unit: document.getElementById('f_unit').value.trim() || 'কেজি',
     priceBasis: basis,
+    packSize: parsePackUnit(document.getElementById('f_unit').value.trim()) ? 0 : (products.find(p=>p.id===id)?.packSize || 0),
     retail: per(Number(document.getElementById('f_retail').value||0)),
     stock: Number(document.getElementById('f_stock').value||0),
     minStock: Number(document.getElementById('f_min').value||0),
@@ -1237,7 +1240,7 @@ function renderCart(){
         <td class="cell-center"><input type="number" min="0.001" step="any" value="${r3(it.qty*optByKey(p,it.mode).factor)}" style="width:75px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartQty('${it.productId}', this.value)">
           ${unitSelectHtml(p, it.mode||'base', `onchange="setCartUnitMode('${it.productId}', this.value)"`)}</td>
         <td class="cell-center"><input type="number" min="0" value="${it.unitPrice}" style="width:80px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartPrice('${it.productId}', this.value)"></td>
-        <td class="cell-num">${money(lineTotal)}<br><span class="muted-cell">${r3(it.qty*optByKey(p,it.mode).factor)} ${esc(optByKey(p,it.mode).label)} × ${money(it.unitPrice)}/${esc(p?.unit||'কেজি')}</span></td>
+        <td class="cell-num">${money(lineTotal)}<br><span class="muted-cell">${r3(it.qty*optByKey(p,it.mode).factor)} ${esc(optByKey(p,it.mode).label)} = ${r3(it.qty)}টি ${esc(p?.unit||'কেজি')} × ${money(it.unitPrice)}</span></td>
         <td class="cell-center"><button class="icon-btn danger" onclick="removeFromCart('${it.productId}')">🗑️</button></td>
       </tr>`;
   }).join('');
@@ -2586,7 +2589,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '২.৪';
+const APP_VERSION = '২.৫';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{
