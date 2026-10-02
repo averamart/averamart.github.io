@@ -298,3 +298,7 @@ tr.row-hl td{background:#FFF6C9 !important;}
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;}
 .toolbar input,.toolbar select{padding:8px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg);}
 .toolbar input[type=search]{flex:1;min-width:160px;}
+
+.badge-locked{background:#FDE8E8;color:#B3261E;}
+.badge-open{background:#E7F6EE;color:#145C40;}
+select:disabled{opacity:.55;cursor:not-allowed;}

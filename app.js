@@ -15,6 +15,7 @@ const CACHE = {
   returns: [],
   shareholders: [],
   contributions: [],
+  closings: [],
   settings: {
     dividendPercent: 50,
     productCategories: ['খাদ্যশস্য','ডাল','তেল','মসলা','অর্গানিক আইটেম','অন্যান্য'],
@@ -23,7 +24,7 @@ const CACHE = {
   },
   users: { admin:{pin:'1234'}, manager:{pin:'2222'}, delivery:{pin:'3333'} }
 };
-const LOADED = { products:false, orders:false, purchases:false, expenses:false, returns:false, shareholders:false, contributions:false, settings:false, users:false };
+const LOADED = { products:false, orders:false, purchases:false, expenses:false, returns:false, shareholders:false, contributions:false, closings:false, settings:false, users:false };
 
 const DEFAULT_PRODUCTS = [
   {id:'P001', name:'প্রিমিয়াম মিনিকেট চাল (৫ কেজি)', category:'খাদ্যশস্য', cost:340, retail:390, shareholder:365, stock:40, minStock:10},
@@ -89,6 +90,11 @@ function attachListeners(){
     else { docRef('contributions').set({items: []}); CACHE.contributions = []; }
     LOADED.contributions = true; onCloudUpdate();
   });
+  docRef('closings').onSnapshot(snap => {
+    if(snap.exists){ CACHE.closings = snap.data().items || []; }
+    else { docRef('closings').set({items: []}); CACHE.closings = []; }
+    LOADED.closings = true; onCloudUpdate();
+  });
   docRef('settings').onSnapshot(snap => {
     if(snap.exists){
       const data = snap.data();
@@ -128,7 +134,7 @@ function onCloudUpdate(){
     // live re-render current page so every device sees updates instantly
     const renderers = {
       dashboard: renderDashboard, products: renderProducts, orders: renderOrders,
-      purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss,
+      purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing,
       invoice: renderInvoice, settings: renderSettings
     };
     (renderers[currentPage] || renderDashboard)();
@@ -141,6 +147,8 @@ function saveSettings(obj){ CACHE.settings = obj; docRef('settings').set(obj); }
 function saveUsers(obj){ CACHE.users = obj; docRef('users').set(obj); }
 
 /* ---------------- Helpers ---------------- */
+function fmtBasis(p){ const n = Number(p&&p.priceBasis)||1; return n===1 ? '' : `${r3(n)} ${(p&&p.unit)||'কেজি'}`; }
+function packPrice(p, field){ const n = Number(p&&p.priceBasis)||1; return Math.round(Number(p&&p[field]||0)*n*100)/100; }
 function money(n){ return '৳' + Number(n||0).toLocaleString('en-BD', {maximumFractionDigits:2}); }
 function todayStr(){ return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Dhaka',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()); }
 function pickedDate(id){ const v = (document.getElementById(id)||{}).value; return /^\d{4}-\d{2}-\d{2}$/.test(v||'') ? v : todayStr(); }
@@ -349,6 +357,7 @@ const NAV_ITEMS = [
   {key:'inventory', label:'ইনভেন্টরি রিপোর্ট', icon:'📋', roles:['admin','manager']},
   {key:'shareholders', label:'শেয়ারহোল্ডার', icon:'💼', roles:['admin']},
   {key:'profitloss', label:'লাভ-ক্ষতি', icon:'📊', roles:['admin']},
+  {key:'closing', label:'মাস ক্লোজিং ও লক', icon:'🔒', roles:['admin']},
   {key:'invoice', label:'ইনভয়েস', icon:'🧾', roles:['admin','manager','delivery']},
   {key:'settings', label:'সেটিংস', icon:'⚙️', roles:['admin']}
 ];
@@ -387,7 +396,7 @@ function go(page){
   document.getElementById('pageTitle').textContent = titles[page] || '';
   const renderers = {
     dashboard: renderDashboard, products: renderProducts, orders: renderOrders,
-    purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss,
+    purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing,
     invoice: renderInvoice, settings: renderSettings
   };
   (renderers[page] || renderDashboard)();
@@ -417,6 +426,226 @@ if('serviceWorker' in navigator){
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js').catch(() => { /* installability is a bonus, never block the app on it */ });
   });
+}
+
+/* ============================================================
+   MONTHLY ACCOUNTS — মাসভিত্তিক হিসাব, জের (carry-forward) ও লক
+   সব হিসাব তারিখযুক্ত এন্ট্রি থেকে বের হয়, তাই আগের মাসে কিছু যোগ/সংশোধন করলে
+   পরের মাসগুলোর শুরুর জের নিজে থেকেই ঠিক হয়ে যায়। লক করা মাসের হিসাব "স্ন্যাপশট" হিসেবে স্থির থাকে।
+   ============================================================ */
+const BN_MONTHS = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'];
+function monthLabel(m){ const p = String(m).split('-'); return (BN_MONTHS[Number(p[1])-1] || p[1]) + ' ' + p[0]; }
+function curMonth(){ return todayStr().slice(0,7); }
+function mOf(d){ return (typeof d==='string' && /^\d{4}-\d{2}/.test(d)) ? d.slice(0,7) : ''; }
+function addMonths(m, n){
+  const p = m.split('-'); const d = new Date(Date.UTC(Number(p[0]), Number(p[1])-1+n, 1));
+  return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0');
+}
+function fmtDT(iso){ try{ return new Date(iso).toLocaleString('en-GB',{timeZone:'Asia/Dhaka', day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}); }catch(e){ return ''; } }
+const r2 = n => Math.round(Number(n||0)*100)/100;
+function closingRec(m){ return (CACHE.closings||[]).find(c=>c.month===m); }
+function isMonthLocked(m){ const c = closingRec(m); return !!(c && c.locked); }
+function isDateLocked(d){ const m = mOf(d); return !!m && isMonthLocked(m); }
+function guardDates(dates, what){
+  for(const d of dates){
+    if(d && isDateLocked(d)){
+      alert(`🔒 ${monthLabel(mOf(d))} মাসের হিসাব লক করা আছে — ${what} করা যাবে না।\n\nবিশেষ প্রয়োজনে অ্যাডমিন "মাস ক্লোজিং ও লক" পেইজ থেকে লক খুলে কাজ করে আবার লক করতে পারবেন।`);
+      return false;
+    }
+  }
+  return true;
+}
+function guardDate(d, what){ return guardDates([d], what); }
+// যে মাসগুলোতে কোনো এন্ট্রি আছে (+ চলমান মাস + লক করা মাস), পুরোনো থেকে নতুন
+function monthsList(){
+  const set = new Set([curMonth()]);
+  [CACHE.orders, CACHE.purchases, CACHE.expenses, CACHE.returns, CACHE.contributions].forEach(a => (a||[]).forEach(x => { const m = mOf(x.date); if(m) set.add(m); }));
+  (CACHE.closings||[]).forEach(c => set.add(c.month));
+  return Array.from(set).sort();
+}
+function moveIndex(){
+  const idx = {}, ordMap = {}, retMap = {};
+  CACHE.orders.forEach(o => ordMap[o.id] = o);
+  const slot = (pid, m) => { const a = idx[pid] || (idx[pid] = {}); return a[m] || (a[m] = {P:0,S:0,R:0,A:0}); };
+  CACHE.purchases.forEach(pu => { const m = mOf(pu.date); if(m && pu.productId) slot(pu.productId, m).P += Number(pu.qty||0); });
+  CACHE.returns.forEach(r => {
+    const o = ordMap[r.orderId];
+    const restocked = (r.restocked!==undefined) ? !!r.restocked : !!(o && o.status==='Delivered');
+    if(!restocked) return;
+    const m = mOf(r.date); if(m) slot(r.productId, m).R += Number(r.qty||0);
+    const rm = retMap[r.orderId] || (retMap[r.orderId] = {});
+    rm[r.productId] = (rm[r.productId]||0) + Number(r.qty||0);
+  });
+  CACHE.orders.forEach(o => {
+    if(o.status!=='Delivered') return;
+    const m = mOf(o.date); if(!m) return;
+    const rm = Object.assign({}, retMap[o.id] || {});
+    orderItems(o).forEach(it => { const extra = rm[it.productId] || 0; delete rm[it.productId]; slot(it.productId, m).S += Number(it.qty||0) + extra; });
+    Object.keys(rm).forEach(pid => { slot(pid, m).S += rm[pid]; });
+  });
+  CACHE.products.forEach(p => (p.adj||[]).forEach(a => { const m = mOf(a.d); if(m) slot(p.id, m).A += Number(a.q||0); }));
+  return idx;
+}
+function stockRowFor(p, m, idx){
+  const mv = idx[p.id] || {};
+  const after = {P:0,S:0,R:0,A:0};
+  Object.keys(mv).forEach(k => { if(k > m){ after.P+=mv[k].P; after.S+=mv[k].S; after.R+=mv[k].R; after.A+=mv[k].A; } });
+  const cur = mv[m] || {P:0,S:0,R:0,A:0};
+  const close = r3(Number(p.stock||0) - (after.P - after.S + after.R + after.A));
+  const open = r3(close - (cur.P - cur.S + cur.R + cur.A));
+  return {open, P:r3(cur.P), S:r3(cur.S), R:r3(cur.R), A:r3(cur.A), close, cost:Number(p.cost||0)};
+}
+// row = [id, name, unit, open, purchased, sold, returned, adjust, close, cost, hidden]
+function liveFigures(m, idx){
+  idx = idx || moveIndex();
+  const products = CACHE.products;
+  const ords = CACHE.orders.filter(o => o.status==='Delivered' && mOf(o.date)===m);
+  const revenue = ords.reduce((t,o) => t + Number(o.total||0), 0);
+  const cogs = ords.reduce((t,o) => t + orderItems(o).reduce((t2,it) => { const p = products.find(x=>x.id===it.productId); return t2 + (p ? Number(p.cost||0) : 0) * Number(it.qty||0); }, 0), 0);
+  const expenses = CACHE.expenses.filter(e => e.kind!=='income' && mOf(e.date)===m).reduce((t,e) => t + Number(e.amount||0), 0);
+  const otherIncome = CACHE.expenses.filter(e => e.kind==='income' && mOf(e.date)===m).reduce((t,e) => t + Number(e.amount||0), 0);
+  const rows = []; let openVal = 0, closeVal = 0;
+  products.forEach(p => {
+    const r = stockRowFor(p, m, idx);
+    openVal += r.open * r.cost; closeVal += r.close * r.cost;
+    if(r.open || r.P || r.S || r.R || r.A || r.close || !p.hidden) rows.push([p.id, p.name, p.unit||'কেজি', r.open, r.P, r.S, r.R, r.A, r.close, r.cost, p.hidden?1:0]);
+  });
+  const custDueNew = CACHE.orders.filter(o => o.status!=='Cancelled' && mOf(o.date)===m).reduce((t,o) => t + orderDue(o), 0);
+  const supDueNew = CACHE.purchases.filter(pu => mOf(pu.date)===m).reduce((t,pu) => t + purchaseDue(pu), 0);
+  const cap = CACHE.shareholders.map(sh => {
+    const after = CACHE.contributions.filter(c => c.shareholderId===sh.id && mOf(c.date) > m).reduce((t,c) => t + Number(c.amount||0), 0);
+    return [sh.id, sh.name, Math.max(0, r2(Number(sh.totalInvested||0) - after))];
+  });
+  return {revenue:r2(revenue), cogs:r2(cogs), expenses:r2(expenses), otherIncome:r2(otherIncome), rows, openVal:r2(openVal), closeVal:r2(closeVal),
+          custDueNew:r2(custDueNew), supDueNew:r2(supDueNew), cap, pct:CACHE.settings.dividendPercent};
+}
+function monthData(m, idx){
+  const c = closingRec(m);
+  let d;
+  if(c && c.locked && c.snap){ d = {...c.snap, locked:true, lockedAt:c.lockedAt}; }
+  else { d = liveFigures(m, idx); d.locked = false; }
+  d.month = m;
+  d.gross = r2(d.revenue - d.cogs);
+  d.net = r2(d.gross + d.otherIncome - d.expenses);
+  d.pool = d.net>0 ? r2(d.net * d.pct / 100) : 0;
+  d.retained = r2(d.net - d.pool);
+  return d;
+}
+function carryForward(m, idx){
+  let t = 0;
+  monthsList().filter(x => x < m).forEach(x => { t += monthData(x, idx).retained; });
+  return r2(t);
+}
+function monthOptionsHtml(selected, includeAll){
+  const cur = curMonth();
+  return (includeAll ? `<option value="all" ${selected==='all'?'selected':''}>সব মাস</option>` : '') +
+    monthsList().slice().reverse().map(m => `<option value="${m}" ${m===selected?'selected':''}>${monthLabel(m)}${isMonthLocked(m)?' 🔒':''}${m===cur?' (চলমান)':''}</option>`).join('');
+}
+function monthStatusHtml(m){
+  const cur = curMonth();
+  if(isMonthLocked(m)){ const c = closingRec(m); return `<div class="flash warn" style="margin-bottom:14px;">🔒 <b>${monthLabel(m)}</b> মাসের হিসাব লক করা আছে (${fmtDT(c.lockedAt)}) — এই পেইজের সংখ্যাগুলো স্থির, কোনো পরিবর্তন হবে না।</div>`; }
+  if(m === cur) return `<div class="flash" style="margin-bottom:14px;">📅 <b>${monthLabel(m)}</b> — চলমান মাস। হিসাব প্রতিদিনের এন্ট্রি অনুযায়ী বদলাচ্ছে। আগের মাসের জের নিজে থেকেই যোগ হয়েছে।</div>`;
+  if(m < cur) return `<div class="flash" style="margin-bottom:14px;">🔓 <b>${monthLabel(m)}</b> — এই মাস এখনো লক হয়নি। হিসাব মিলিয়ে দেখে ${isAdmin()?'"মাস ক্লোজিং ও লক" পেইজ থেকে':'অ্যাডমিনকে বলে'} লক করুন।</div>`;
+  return '';
+}
+let VIEW_MONTH = curMonth();
+function onViewMonth(sel){ VIEW_MONTH = sel.value; (currentPage==='profitloss' ? renderProfitLoss : renderInventory)(); }
+function viewMonthReport(m, page){ VIEW_MONTH = m; go(page); }
+
+function snapshotOf(m){ const f = liveFigures(m); return f; }
+function lockMonth(m){
+  if(!isAdmin()){ alert('মাস লক করা শুধু অ্যাডমিন করতে পারবেন।'); return; }
+  if(m >= curMonth()){ alert('চলমান মাস শেষ হওয়ার পরই সেই মাস লক করা যাবে।'); return; }
+  const earlier = monthsList().filter(x => x < m && !isMonthLocked(x));
+  if(earlier.length){ alert(`আগে ${monthLabel(earlier[0])} মাস লক করুন — মাস লক করতে হয় ক্রমানুসারে (পুরোনো থেকে নতুন)।`); return; }
+  const f = monthData(m);
+  if(!confirm(`${monthLabel(m)} মাসের হিসাব ক্লোজ ও লক করবেন?\n\nবিক্রয়: ${money(f.revenue)}\nনিট লাভ: ${money(f.net)}\nমাস শেষের স্টকের মূল্য: ${money(f.closeVal)}\n\nলক করলে এই মাসের তারিখে কোনো অর্ডার/ক্রয়/খরচ/আয়/জমা যোগ, সংশোধন বা মোছা যাবে না। মাস শেষের স্টক, লাভ ও জমা পরের মাসে জের হিসেবে যোগ হবে।`)) return;
+  const now = new Date().toISOString();
+  const old = closingRec(m) || {};
+  const list = (CACHE.closings||[]).filter(c => c.month !== m);
+  list.push({month:m, locked:true, lockedAt:now, lockedBy:'admin', snap:snapshotOf(m), log:(old.log||[]).concat([{t:now, a:'lock'}])});
+  saveCollection('closings', list);
+  setFlash('closing', `✅ ${monthLabel(m)} মাসের হিসাব ক্লোজ ও লক হয়েছে। মাস শেষের স্টক ও জমা পরের মাসে জের হিসেবে যোগ হয়ে গেছে।`, []);
+  renderClosing(); toTop();
+}
+function unlockMonth(m){
+  if(!isAdmin()){ alert('লক খোলা শুধু অ্যাডমিন করতে পারবেন।'); return; }
+  const later = (CACHE.closings||[]).filter(c => c.locked && c.month > m).map(c => c.month).sort();
+  let msg = `🔓 ${monthLabel(m)} মাসের লক খুলবেন?\n\nলক খুলে যা যোগ/সংশোধন করার করুন, তারপর অবশ্যই আবার লক করবেন।`;
+  if(later.length) msg += `\n\n⚠️ এই মাসের পরিবর্তন পরের মাসগুলোর শুরুর জের বদলে দেয়, তাই এর পরের লক করা মাসগুলোও (${later.map(monthLabel).join(', ')}) খুলে যাবে। কাজ শেষে পুরোনো থেকে নতুন ক্রমে আবার লক করতে হবে।`;
+  if(!confirm(msg)) return;
+  const pin = prompt('নিশ্চিত করতে অ্যাডমিন পিন দিন:');
+  if(pin===null) return;
+  if(String(pin).trim() !== String((CACHE.users.admin||{}).pin)){ alert('ভুল পিন — লক খোলা হয়নি।'); return; }
+  const why = prompt('লক খোলার কারণ লিখুন (ঐচ্ছিক):') || '';
+  const now = new Date().toISOString(), tgt = [m].concat(later);
+  const list = (CACHE.closings||[]).map(c => tgt.includes(c.month)
+    ? {month:c.month, locked:false, lockedAt:c.lockedAt, lockedBy:c.lockedBy, unlockedAt:now, log:(c.log||[]).concat([{t:now, a:'unlock', why: c.month===m ? why : 'আগের মাস খোলার কারণে'}])}
+    : c);
+  saveCollection('closings', list);
+  setFlash('closing', `🔓 ${tgt.map(monthLabel).join(', ')} খোলা হয়েছে। প্রয়োজনীয় কাজ শেষে আবার লক করুন।`, [], true);
+  renderClosing(); toTop();
+}
+function closingBanner(){
+  if(!isAdmin()) return '';
+  const open = monthsList().filter(m => m < curMonth() && !isMonthLocked(m));
+  if(!open.length) return '';
+  return `<div class="alert-strip" style="background:#FCEBD5;border-color:#F0D3A0;color:#8A5A16;">🔒 <b>${monthLabel(open[0])}</b>${open.length>1?` সহ ${open.length}টি আগের মাস`:' মাস'} এখনো ক্লোজ ও লক করা হয়নি। <a href="#" onclick="go('closing');return false;" style="color:inherit;font-weight:700;">মাস ক্লোজিং ও লক পেইজে যান</a></div>`;
+}
+function renderClosing(){
+  const cur = curMonth(), ml = monthsList(), idx = moveIndex();
+  const capitalNow = CACHE.shareholders.reduce((t,sh) => t + Number(sh.totalInvested||0), 0);
+  const capitalAtStart = r2(capitalNow - CACHE.contributions.filter(c => mOf(c.date) >= cur).reduce((t,c) => t + Number(c.amount||0), 0));
+  const cd = monthData(cur, idx);
+  const oldCust = CACHE.orders.filter(o => o.status!=='Cancelled' && mOf(o.date) < cur).reduce((t,o) => t + orderDue(o), 0);
+  const oldSup = CACHE.purchases.filter(pu => mOf(pu.date) < cur).reduce((t,pu) => t + purchaseDue(pu), 0);
+  const rows = ml.slice().reverse().map(m => {
+    const d = monthData(m, idx);
+    const earlier = ml.filter(x => x < m && !isMonthLocked(x));
+    let action;
+    if(d.locked) action = `<button class="btn btn-outline btn-sm" onclick="unlockMonth('${m}')">🔓 লক খুলুন</button>`;
+    else if(m >= cur) action = `<span class="muted-cell">${m===cur?'চলমান মাস':'ভবিষ্যতের মাস'}</span>`;
+    else if(earlier.length) action = `<span class="muted-cell">আগে ${monthLabel(earlier[0])} লক করুন</span>`;
+    else action = `<button class="btn btn-primary btn-sm" onclick="lockMonth('${m}')">🔒 ক্লোজ ও লক করুন</button>`;
+    return `<tr>
+      <td><b>${monthLabel(m)}</b></td>
+      <td class="cell-center">${d.locked ? '<span class="badge badge-locked">🔒 লক</span>' : '<span class="badge badge-open">খোলা</span>'}</td>
+      <td class="cell-num">${money(d.revenue)}</td>
+      <td class="cell-num">${money(d.net)}</td>
+      <td class="cell-num">${money(d.closeVal)}</td>
+      <td class="cell-center">${action}</td>
+      <td class="cell-center"><button class="icon-btn" title="ইনভেন্টরি রিপোর্ট" onclick="viewMonthReport('${m}','inventory')">📋</button><button class="icon-btn" title="লাভ-ক্ষতি" onclick="viewMonthReport('${m}','profitloss')">📊</button></td>
+    </tr>`;
+  }).join('');
+  const logs = [];
+  (CACHE.closings||[]).forEach(c => (c.log||[]).forEach(l => logs.push({...l, month:c.month})));
+  logs.sort((a,b) => a.t < b.t ? 1 : -1);
+  document.getElementById('pageContent').innerHTML = `
+    ${flashHtml('closing')}
+    <div class="panel">
+      <h3>চলমান মাস (${monthLabel(cur)}) — আগের মাস থেকে যা জের হিসেবে এসেছে</h3>
+      <table>
+        <tr><td>মাসের শুরুর স্টকের মূল্য (ক্রয়মূল্যে)</td><td class="cell-num">${money(cd.openVal)}</td></tr>
+        <tr><td>আগের মাসগুলোর জমা জের (প্রতিষ্ঠানের নিজস্ব অংশ)</td><td class="cell-num">${money(carryForward(cur, idx))}</td></tr>
+        <tr><td>শেয়ারহোল্ডারদের মোট জমা (মাসের শুরুতে)</td><td class="cell-num">${money(capitalAtStart)}</td></tr>
+        <tr><td>আগের মাসগুলোর কাস্টমার বকেয়া (এখনো বাকি)</td><td class="cell-num">${money(oldCust)}</td></tr>
+        <tr><td>আগের মাসগুলোর সরবরাহকারী বকেয়া (এখনো বাকি)</td><td class="cell-num">${money(oldSup)}</td></tr>
+      </table>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">এগুলো নিজে থেকেই নতুন মাসে যোগ হয়। আগের মাসে পরে কোনো ক্রয়/খরচ/অর্ডার (পুরোনো তারিখে) যোগ করলে এই জের নিজে থেকেই ঠিক হয়ে যাবে।</p>
+    </div>
+    <div class="panel">
+      <h3>মাসভিত্তিক ক্লোজিং</h3>
+      <p style="font-size:12.5px;color:var(--text-muted);">মাস শেষ হলে হিসাব মিলিয়ে "ক্লোজ ও লক করুন" চাপুন। লক করা মাসের তারিখে কোনো অর্ডার, ক্রয়, খরচ/আয় বা শেয়ারহোল্ডার জমা যোগ, সংশোধন বা মোছা যায় না। লক ক্রমানুসারে (পুরোনো থেকে নতুন) করতে হয়।</p>
+      <div class="table-wrap"><table><thead><tr>
+        <th>মাস</th><th>অবস্থা</th><th>বিক্রয়</th><th>নিট লাভ</th><th>মাস শেষের স্টক মূল্য</th><th>একশন</th><th>রিপোর্ট</th>
+      </tr></thead><tbody>${rows}</tbody></table></div>
+    </div>
+    <div class="panel">
+      <h3>লক/আনলক ইতিহাস</h3>
+      <div class="table-wrap"><table><thead><tr><th>সময়</th><th>মাস</th><th>কাজ</th><th>কারণ</th></tr></thead><tbody>
+        ${logs.slice(0,20).map(l => `<tr><td>${fmtDT(l.t)}</td><td>${monthLabel(l.month)}</td><td>${l.a==='lock'?'🔒 লক':'🔓 আনলক'}</td><td>${esc(l.why||'')}</td></tr>`).join('') || '<tr><td colspan="4" class="empty-state">এখনো কোনো মাস লক করা হয়নি</td></tr>'}
+      </tbody></table></div>
+    </div>`;
 }
 
 /* ============================================================
@@ -453,7 +682,7 @@ function renderDashboard(){
     cards = `<div class="stat-card"><div class="label">এই মাসের নিট লাভ</div><div class="value">${money(netProfit)}</div></div>` + cards;
   }
 
-  let html = `<div class="grid grid-4">${cards}</div>`;
+  let html = closingBanner() + `<div class="grid grid-4">${cards}</div>`;
 
   if(lowStock.length){
     html += `<div class="alert-strip">⚠️ কম স্টকে থাকা পণ্য: ${lowStock.map(p=>esc(p.name)).join('، ')}</div>`;
@@ -501,8 +730,8 @@ function productRowsHtml(){
       <td>${esc(p.name)}${p.hidden ? ' <span class="badge badge-hidden">লুকানো</span><br><span class="muted-cell" style="font-size:11.5px;">অর্ডার সার্চ/ইনভেন্টরিতে আসবে না — ক্রয় এন্ট্রি দিলে চালু হবে</span>' : ''}${p.priceTiers ? `<br><span class="muted-cell">${esc(p.priceTiers)}</span>` : ''}</td>
       <td>${esc(p.category)}</td>
       <td>${esc(p.unit||'কেজি')}</td>
-      ${admin ? `<td class="cell-num">${money(p.cost)}</td>` : ''}
-      <td class="cell-num">${money(p.retail)}</td>
+      ${admin ? `<td class="cell-num">${money(packPrice(p,'cost'))}${fmtBasis(p)?`<br><span class="muted-cell" style="font-size:11.5px;">/ ${fmtBasis(p)}</span>`:''}</td>` : ''}
+      <td class="cell-num">${money(packPrice(p,'retail'))}${fmtBasis(p)?`<br><span class="muted-cell" style="font-size:11.5px;">/ ${fmtBasis(p)}</span>`:`<br><span class="muted-cell" style="font-size:11.5px;">/ ১ ${esc(p.unit||'কেজি')}</span>`}</td>
       <td>${fmtStock(p.stock, p)} ${Number(p.stock)<=Number(p.minStock) && !p.hidden ? '<span class="badge badge-low">লো স্টক</span>' : ''}</td>
       <td class="cell-center">
         <button class="icon-btn" title="${p.hidden?'আবার চালু করুন':'লুকিয়ে রাখুন'}" onclick="toggleProductHidden('${p.id}')">${p.hidden?'🙈':'👁️'}</button>
@@ -546,8 +775,8 @@ function renderProducts(){
       </div>
       <div class="table-wrap"><table><thead><tr>
         <th>আইডি</th><th>পণ্যের নাম</th><th>ক্যাটাগরি</th><th>একক</th>
-        ${isAdmin?'<th>ক্রয়মূল্য</th>':''}
-        <th>বিক্রয়মূল্য</th><th>স্টক</th><th>একশন</th>
+        ${isAdmin?'<th>ক্রয়মূল্য (কত পরিমাণে)</th>':''}
+        <th>বিক্রয়মূল্য (কত পরিমাণে)</th><th>স্টক</th><th>একশন</th>
       </tr></thead><tbody id="prodBody">${rowsHtml}</tbody></table></div>
     </div>
     <div id="modalHolder"></div>
@@ -613,7 +842,7 @@ function handleExcelUpload(event){
           if(cost!==null) ch.cost = Number(cost);
           if(retail!==null) ch.retail = Number(retail);
           if(min!==null) ch.minStock = Number(min);
-          if(updateStock && stock!==null) ch.stock = Number(stock);
+          if(updateStock && stock!==null){ ch.stock = Number(stock); if(r3(ch.stock)!==r3(old.stock)) ch.adj = (old.adj||[]).concat([{d: todayStr(), q: r3(ch.stock - Number(old.stock||0))}]); }
           if(active!==null) ch.hidden = isNo(active);
           products[idx] = {...old, ...ch};
           updated++;
@@ -626,7 +855,9 @@ function handleExcelUpload(event){
             unit: unit ? String(unit).trim() : 'কেজি',
             cost: Number(cost||0), retail: Number(retail||0),
             stock: Number(stock||0), minStock: Number(min ?? 5),
-            hidden: active!==null ? isNo(active) : false
+            hidden: active!==null ? isNo(active) : false,
+            createdAt: todayStr(),
+            adj: Number(stock||0)>0 ? [{d: todayStr(), q: r3(Number(stock)), n:'প্রারম্ভিক স্টক'}] : []
           });
           added++;
         } else { skipped++; }
@@ -654,6 +885,17 @@ function toggleProductHidden(id){
   renderProducts();
 }
 
+function updatePriceHint(){
+  const unit = document.getElementById('f_unit').value || 'কেজি';
+  const n = Number(document.getElementById('f_basis').value)||1;
+  const bl = n===1 ? `প্রতি ১ ${unit}` : `${r3(n)} ${unit}-এর জন্য`;
+  document.querySelectorAll('.basis-lbl').forEach(e=>e.textContent = bl);
+  const rEl = document.getElementById('f_retail'), cEl = document.getElementById('f_cost');
+  const r = Number(rEl.value||0)/n, c = cEl ? Number(cEl.value||0)/n : null;
+  document.getElementById('f_pricehint').innerHTML = `📌 বিক্রয়মূল্য: <b>${money(Number(rEl.value||0))} / ${n===1?'১':r3(n)} ${esc(unit)}</b>`
+    + (n!==1 ? ` → প্রতি ১ ${esc(unit)} <b>${money(r)}</b>` : '')
+    + (c!==null ? `<br>ক্রয়মূল্য: <b>${money(Number(cEl.value||0))} / ${n===1?'১':r3(n)} ${esc(unit)}</b>`+(n!==1?` → প্রতি ১ ${esc(unit)} <b>${money(c)}</b>`:'') : '');
+}
 function openProductForm(id){
   const products = CACHE.products;
   const p = id ? products.find(x=>x.id===id) : null;
@@ -668,13 +910,18 @@ function openProductForm(id){
             ${CACHE.settings.productCategories.map(c=>`<option ${p&&p.category===c?'selected':''}>${esc(c)}</option>`).join('')}
           </select>
         </div>
-        <div class="form-field"><label>পরিমাণ/একক — মসলা, চাল, ডাল ইত্যাদির জন্য "কেজি" দিন, দামও প্রতি কেজির দিন</label>
+        <div class="form-field"><label>পরিমাণ/একক — মসলা, চাল, ডাল ইত্যাদির জন্য "কেজি" দিন, ডাল/চালের মতো পণ্যে "কেজি" রাখুন</label>
           <select id="f_unit">
             ${UNIT_OPTIONS.map(u=>`<option ${(p&&p.unit===u)||(!p&&u==='কেজি')?'selected':''}>${u}</option>`).join('')}
           </select>
         </div>
-        ${isAdmin?`<div class="form-field"><label>ক্রয়মূল্য (৳) — এই এককে</label><input id="f_cost" type="number" value="${p?p.cost:''}"></div>`:''}
-        <div class="form-field"><label>বিক্রয়মূল্য (৳) — প্রতি এককে</label><input id="f_retail" type="number" value="${p?p.retail:''}"></div>
+        <div class="form-field"><label>নিচের দাম কত পরিমাণের জন্য? (যেমন ১ কেজি, ৫ কেজি, ১ প্যাকেট)</label>
+          <input id="f_basis" type="number" step="any" min="0" value="${p?(Number(p.priceBasis)||1):1}" oninput="updatePriceHint()">
+          <span class="muted-cell" style="font-size:11.5px;">১ কেজির দাম হলে ১ রাখুন। ৫ কেজির দাম হলে ৫ লিখুন — তখন ক্রয়মূল্য ও বিক্রয়মূল্য ৫ কেজির দাম বসাবেন, সিস্টেম নিজে প্রতি একক হিসাব করে নেবে।</span>
+        </div>
+        ${isAdmin?`<div class="form-field"><label>ক্রয়মূল্য (৳) — <span class="basis-lbl"></span></label><input id="f_cost" type="number" step="any" value="${p?packPrice(p,'cost'):''}" oninput="updatePriceHint()"></div>`:''}
+        <div class="form-field"><label>বিক্রয়মূল্য (৳) — <span class="basis-lbl"></span></label><input id="f_retail" type="number" step="any" value="${p?packPrice(p,'retail'):''}" oninput="updatePriceHint()"></div>
+        <div class="form-field" style="grid-column:1/-1;"><div id="f_pricehint" class="flash" style="margin:0;"></div></div>
         <div class="form-field"><label>বর্তমান স্টক (এককে)</label><input id="f_stock" type="number" value="${p?p.stock:0}"></div>
         <div class="form-field"><label>ন্যূনতম স্টক সতর্কতা</label><input id="f_min" type="number" value="${p?p.minStock:5}"></div>
         <div class="form-field"><label>বিক্রির জন্য চালু?</label>
@@ -689,6 +936,8 @@ function openProductForm(id){
       </div>
     </div>`;
   openForm(html);
+  document.getElementById('f_unit').addEventListener('change', updatePriceHint);
+  updatePriceHint();
 }
 
 function saveProduct(id){
@@ -696,21 +945,30 @@ function saveProduct(id){
   const isAdmin = getSession().role==='admin';
   const name = document.getElementById('f_name').value.trim();
   if(!name){ alert('পণ্যের নাম দিন'); return; }
+  const basis = Number(document.getElementById('f_basis').value);
+  if(!(basis>0)){ alert('দাম কত পরিমাণের জন্য তা সঠিকভাবে দিন (যেমন ১ বা ৫)'); return; }
+  const per = v => Math.round(v/basis*10000)/10000;
   const data = {
     name,
     category: document.getElementById('f_cat').value,
-    cost: isAdmin ? Number(document.getElementById('f_cost').value||0) : (products.find(p=>p.id===id)?.cost || 0),
+    cost: isAdmin ? per(Number(document.getElementById('f_cost').value||0)) : (products.find(p=>p.id===id)?.cost || 0),
     unit: document.getElementById('f_unit').value.trim() || 'কেজি',
-    retail: Number(document.getElementById('f_retail').value||0),
+    priceBasis: basis,
+    retail: per(Number(document.getElementById('f_retail').value||0)),
     stock: Number(document.getElementById('f_stock').value||0),
     minStock: Number(document.getElementById('f_min').value||0),
     hidden: !document.getElementById('f_active').checked
   };
   if(id){
     const idx = products.findIndex(p=>p.id===id);
-    products[idx] = {...products[idx], ...data};
+    const oldStock = Number(products[idx].stock||0);
+    const adj = (products[idx].adj||[]).slice();
+    if(r3(data.stock) !== r3(oldStock)) adj.push({d: todayStr(), q: r3(data.stock - oldStock)});
+    products[idx] = {...products[idx], ...data, adj};
   } else {
     data.id = genId('P', products);
+    data.createdAt = todayStr();
+    if(Number(data.stock) > 0) data.adj = [{d: todayStr(), q: r3(data.stock), n:'প্রারম্ভিক স্টক'}];
     products.push(data);
   }
   saveCollection('products', products);
@@ -734,9 +992,11 @@ function deleteProduct(id){
 /* ============================================================
    ORDERS / SALES
    ============================================================ */
+let ORD_MONTH = 'all';
+function onOrderMonth(sel){ ORD_MONTH = sel.value; renderOrders(); }
 function renderOrders(){
   const session = getSession();
-  const orders = CACHE.orders;
+  const orders = CACHE.orders.filter(o => ORD_MONTH==='all' || mOf(o.date)===ORD_MONTH);
   const products = CACHE.products;
   const isDelivery = session.role==='delivery';
   const canSeeMoney = !isDelivery;
@@ -758,12 +1018,12 @@ function renderOrders(){
       <td>${itemsSummary(o)}</td>
       ${canSeeMoney ? `<td class="cell-num">${money(o.total)}</td>` : ''}
       <td class="cell-center">
-        <select onchange="updateOrderStatus('${o.id}', this.value)">
+        <select ${isDateLocked(o.date)?'disabled title="এই মাস লক করা"':''} onchange="updateOrderStatus('${o.id}', this.value)">
           ${['Pending','Processing','Delivered','Cancelled'].map(s=>`<option value="${s}" ${o.status===s?'selected':''}>${STATUS_BN[s]}</option>`).join('')}
         </select>
       </td>
       ${canSeeMoney ? `<td class="cell-center"><span class="badge ${PAY_BADGE[o.paymentStatus]}">${PAY_BN[o.paymentStatus]}</span></td>` : ''}
-      ${!isDelivery ? `<td class="cell-center"><button class="icon-btn" title="ইনভয়েস দেখুন" onclick="viewInvoice('${o.id}')">🧾</button>${isAdmin() ? `<button class="icon-btn" title="সংশোধন" onclick="openOrderForm('${o.id}')">✏️</button><button class="icon-btn danger" title="মুছুন" onclick="deleteOrder('${o.id}')">🗑️</button>` : ''}</td>` : ''}
+      ${!isDelivery ? `<td class="cell-center"><button class="icon-btn" title="ইনভয়েস দেখুন" onclick="viewInvoice('${o.id}')">🧾</button>${isAdmin() && isDateLocked(o.date) ? '<span title="এই মাস লক করা">🔒</span>' : isAdmin() ? `<button class="icon-btn" title="সংশোধন" onclick="openOrderForm('${o.id}')">✏️</button><button class="icon-btn danger" title="মুছুন" onclick="deleteOrder('${o.id}')">🗑️</button>` : ''}</td>` : ''}
     </tr>`).join('');
 
   document.getElementById('pageContent').innerHTML = `
@@ -771,6 +1031,11 @@ function renderOrders(){
       <div class="panel-head">
         <h3>অর্ডার ও সেলস</h3>
         ${!isDelivery ? `<button class="btn btn-accent btn-sm" onclick="openOrderForm()">+ নতুন অর্ডার</button>` : ''}
+      </div>
+      <div class="toolbar">
+        <label style="font-size:13px;">মাস:</label>
+        <select onchange="onOrderMonth(this)">${monthOptionsHtml(ORD_MONTH, true)}</select>
+        <span class="muted-cell">${orders.length}টি অর্ডার</span>
       </div>
       <div class="table-wrap"><table><thead><tr>
         <th>আইডি</th><th>তারিখ</th><th>কাস্টমার</th><th>পণ্য</th>
@@ -790,6 +1055,7 @@ function updateOrderStatus(id, newStatus){
   const products = CACHE.products.slice();
   const idx = orders.findIndex(o=>o.id===id);
   const order = {...orders[idx]};
+  if(!guardDate(order.date, 'স্ট্যাটাস পরিবর্তন')){ renderOrders(); return; }
   const wasDelivered = order.status === 'Delivered';
   const willBeDelivered = newStatus === 'Delivered';
 
@@ -818,6 +1084,7 @@ function cancelOrderForm(){
 function viewInvoice(id){ INVOICE_PRESELECT = id; go('invoice'); }
 function openOrderForm(id, from){
   if(id && !isAdmin()){ alert('অর্ডার/ইনভয়েস সংশোধন শুধু অ্যাডমিন করতে পারবেন।'); return; }
+  if(id){ const eo = CACHE.orders.find(o=>o.id===id); if(eo && !guardDate(eo.date, 'সংশোধন')) return; }
   ORDER_FROM = from || 'orders'; ORDER_EDIT_ID = id || '';
   const orders = CACHE.orders;
   const o = id ? orders.find(x=>x.id===id) : null;
@@ -1016,6 +1283,8 @@ function saveOrder(id){
   };
   if(!data.customerName){ alert('কাস্টমারের নাম দিন'); return; }
   if(!data.items.length){ alert('অন্তত একটি পণ্য যোগ করুন'); return; }
+  if(!guardDates([data.date, id ? (orders.find(o=>o.id===id)||{}).date : ''], id ? 'সংশোধন' : 'এন্ট্রি')) return;
+  if(ORD_MONTH!=='all') ORD_MONTH = mOf(data.date) || ORD_MONTH;
   if(data.paymentStatus==='Paid') data.paidAmount = Math.max(data.paidAmount, data.total);
   else if(data.paymentStatus==='Due') data.paidAmount = 0;
   if(id){
@@ -1043,6 +1312,7 @@ function saveOrder(id){
 function deleteOrder(id){
   if(!isAdmin()){ alert('অর্ডার মোছা শুধু অ্যাডমিন করতে পারবেন।'); return; }
   const o = CACHE.orders.find(x=>x.id===id); if(!o) return;
+  if(!guardDate(o.date, 'মুছে ফেলা')) return;
   const delivered = o.status==='Delivered';
   if(!confirm(`এই অর্ডারটি (${id}) মুছে ফেলতে চান?${delivered ? '\n\nঅর্ডারটি ডেলিভারড ছিল — মুছলে এর পণ্যগুলো স্টকে ফেরত যাবে।' : ''}`)) return;
   if(delivered){
@@ -1058,10 +1328,19 @@ function deleteOrder(id){
    PURCHASES
    ============================================================ */
 let PU_EDIT_ID = '';
-function renderPurchases(){
+let PU_Q = '', PU_PAY = 'all', PU_MONTH = curMonth();
+function purchaseRowsHtml(){
   const admin = isAdmin();
-  const purchases = CACHE.purchases;
   const products = CACHE.products;
+  const q = PU_Q.trim().toLowerCase();
+  const purchases = CACHE.purchases.filter(pu=>{
+    if(PU_MONTH!=='all' && mOf(pu.date)!==PU_MONTH) return false;
+    if(PU_PAY==='Paid' && pu.paymentStatus!=='Paid') return false;
+    if(PU_PAY==='Due' && pu.paymentStatus==='Paid') return false;
+    if(!q) return true;
+    const prod = products.find(p=>p.id===pu.productId);
+    return [pu.id, pu.supplier, pu.productName, prod&&prod.name, pu.date].some(v=>String(v||'').toLowerCase().includes(q));
+  });
   let rows = purchases.slice().reverse().map(pu => {
     const freeQty = Number(pu.freeQty||0);
     const avgUnitCost = pu.qty>0 ? pu.totalCost/pu.qty : 0;
@@ -1075,19 +1354,37 @@ function renderPurchases(){
       <td class="cell-num">${money(pu.totalCost)}</td>
       <td class="cell-num muted-cell">${money(avgUnitCost)}/${unit}</td>
       <td class="cell-center"><span class="badge ${pu.paymentStatus==='Paid'?'badge-paid':'badge-due'}">${pu.paymentStatus==='Paid'?'পরিশোধিত':'বকেয়া'}</span></td>
-      <td class="cell-center">${admin ? `<button class="icon-btn" title="ভুল সংশোধন করুন" onclick="openPurchaseForm('${pu.id}')">✏️</button><button class="icon-btn danger" title="মুছুন" onclick="deletePurchase('${pu.id}')">🗑️</button>` : '<span class="muted-cell">—</span>'}</td>
+      <td class="cell-center">${admin && isDateLocked(pu.date) ? '<span title="এই মাস লক করা">🔒</span>' : admin ? `<button class="icon-btn" title="ভুল সংশোধন করুন" onclick="openPurchaseForm('${pu.id}')">✏️</button><button class="icon-btn danger" title="মুছুন" onclick="deletePurchase('${pu.id}')">🗑️</button>` : '<span class="muted-cell">—</span>'}</td>
     </tr>`;
   }).join('');
-
+  return rows || `<tr><td colspan="9" class="empty-state">${CACHE.purchases.length ? 'কিছু পাওয়া যায়নি' : 'কোনো ক্রয় এন্ট্রি নেই'}</td></tr>`;
+}
+function onPurchaseSearch(){
+  PU_Q = document.getElementById('puSearch').value;
+  PU_PAY = document.getElementById('puPay').value;
+  PU_MONTH = document.getElementById('puMonth').value;
+  document.getElementById('puBody').innerHTML = purchaseRowsHtml();
+}
+function renderPurchases(){
+  const admin = isAdmin();
   document.getElementById('pageContent').innerHTML = `
     ${flashHtml('purchases')}
     <div class="panel">
       <div class="panel-head"><h3>ক্রয় খাতা (সোর্সিং)</h3>
         <button class="btn btn-accent btn-sm" onclick="openPurchaseForm()">+ নতুন ক্রয়</button>
       </div>
+      <div class="toolbar">
+        <select id="puMonth" onchange="onPurchaseSearch()">${monthOptionsHtml(PU_MONTH, true)}</select>
+        <input type="search" id="puSearch" placeholder="🔍 পণ্য / সরবরাহকারী / আইডি / তারিখ দিয়ে খুঁজুন" value="${esc(PU_Q)}" oninput="onPurchaseSearch()">
+        <select id="puPay" onchange="onPurchaseSearch()">
+          <option value="all" ${PU_PAY==='all'?'selected':''}>সব পেমেন্ট</option>
+          <option value="Paid" ${PU_PAY==='Paid'?'selected':''}>পরিশোধিত</option>
+          <option value="Due" ${PU_PAY==='Due'?'selected':''}>বকেয়া</option>
+        </select>
+      </div>
       <div class="table-wrap"><table><thead><tr>
         <th>আইডি</th><th>তারিখ</th><th>সরবরাহকারী</th><th>পণ্য</th><th>পরিমাণ</th><th>মোট খরচ</th><th>গড় খরচ/একক</th><th>পেমেন্ট</th><th>একশন</th>
-      </tr></thead><tbody>${rows || `<tr><td colspan="9" class="empty-state">কোনো ক্রয় এন্ট্রি নেই</td></tr>`}</tbody></table></div>
+      </tr></thead><tbody id="puBody">${purchaseRowsHtml()}</tbody></table></div>
       <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">ফ্রি আইটেম এলে মোট পরিমাণের মধ্যেই সেটা ধরে "গড় খরচ/একক" স্বয়ংক্রিয়ভাবে হিসাব হয় — আলাদা কিছু করতে হয় না।${admin ? ' ভুল এন্ট্রি ✏️ বাটনে সংশোধন করুন — স্টক নিজে থেকেই সমন্বয় হবে।' : ' ভুল এন্ট্রি সংশোধন বা মোছা শুধু অ্যাডমিন করতে পারবেন — অ্যাডমিনকে জানান।'}</p>
     </div>
     <div id="modalHolder"></div>
@@ -1097,6 +1394,7 @@ function renderPurchases(){
 function openPurchaseForm(id){
   if(id && !isAdmin()){ alert('ক্রয় এন্ট্রি সংশোধন শুধু অ্যাডমিন করতে পারবেন।'); return; }
   const pu = id ? CACHE.purchases.find(x=>x.id===id) : null;
+  if(pu && !guardDate(pu.date, 'সংশোধন')) return;
   const products = CACHE.products;
   const hasProd = !!(pu && products.some(p=>p.id===pu.productId));
   PU_EDIT_ID = id || '';
@@ -1215,6 +1513,7 @@ function savePurchase(){
   const freeQty = r3(Number(document.getElementById('pu_freeqty').value||0)/div);
   if(qty<=0){ alert('পরিমাণ সঠিকভাবে দিন'); return; }
   if(freeQty>qty){ alert('ফ্রি পরিমাণ মোট পরিমাণের চেয়ে বেশি হতে পারে না'); return; }
+  if(!guardDates([pickedDate('pu_date'), id ? (purchases.find(x=>x.id===id)||{}).date : ''], id ? 'সংশোধন' : 'এন্ট্রি')) return;
   const totalCost = Number(document.getElementById('pu_cost').value||0);
   const status = document.getElementById('pu_pay').value;
   let paid = Number(document.getElementById('pu_paid').value||0);
@@ -1256,6 +1555,7 @@ function savePurchase(){
   }
   saveCollection('products', products);
   saveCollection('purchases', purchases);
+  PU_Q = ''; PU_PAY = 'all'; if(PU_MONTH!=='all') PU_MONTH = mOf(data.date) || PU_MONTH;
   if(created){
     setFlash('purchases', `✅ ক্রয় সংরক্ষিত। <b>${esc(created.name)}</b> নতুন পণ্য হিসেবে পণ্য তালিকায় যোগ হয়েছে (আইডি ${created.id}), স্টক ${fmtStock(products[pi].stock, products[pi])}। ক্রয়মূল্য প্রতি এককে ${money(created.cost)} ধরা হয়েছে।${created.retail>0 ? '' : '<br>⚠️ বিক্রয়মূল্য এখনো ৳0 — <a href="#" onclick="go(\'products\');return false;">পণ্য তালিকা</a> থেকে দাম বসিয়ে দিন।'}`, savedId, !(created.retail>0));
   } else if(id){
@@ -1269,6 +1569,7 @@ function savePurchase(){
 function deletePurchase(id){
   if(!isAdmin()){ alert('ক্রয় এন্ট্রি মোছা শুধু অ্যাডমিন করতে পারবেন।'); return; }
   const pu = CACHE.purchases.find(x=>x.id===id); if(!pu) return;
+  if(!guardDate(pu.date, 'মুছে ফেলা')) return;
   if(!confirm(`এই ক্রয় এন্ট্রিটি (${id}) মুছে ফেলতে চান?\n\nএই এন্ট্রির ${pu.qty} পরিমাণ স্টক থেকে বাদ যাবে।`)) return;
   const products = CACHE.products.map(p=>({...p}));
   adjustStock(products, [{productId: pu.productId, qty: pu.qty}], -1);
@@ -1281,11 +1582,12 @@ function deletePurchase(id){
    EXPENSES  (ভাউচার নম্বরসহ — আয় ও খরচ দুই ক্ষেত্রেই)
    ============================================================ */
 const INCOME_CATEGORIES = ['কোম্পানি কমিশন','রিবেট/ক্যাশব্যাক','অন্যান্য আয়'];
-let EXP_EDIT_ID = '', EXP_KIND = '', EXP_Q = '';
+let EXP_EDIT_ID = '', EXP_KIND = '', EXP_Q = '', EXP_MONTH = curMonth();
 function expenseRowsHtml(){
   const admin = isAdmin();
   const q = EXP_Q.trim().toLowerCase();
   const list = CACHE.expenses.slice().reverse().filter(e=>{
+    if(EXP_MONTH!=='all' && mOf(e.date)!==EXP_MONTH) return false;
     if(!q) return true;
     return [e.id, e.voucherNo, e.category, e.approvedBy, e.date].some(v=>String(v||'').toLowerCase().includes(q));
   });
@@ -1297,13 +1599,21 @@ function expenseRowsHtml(){
       <td>${inc?'<span class="badge badge-paid">আয়</span> ':''}${esc(e.category)}</td>
       <td>${e.voucherNo ? esc(e.voucherNo) : '<span class="muted-cell">—</span>'}</td>
       <td class="cell-num" style="${inc?'color:#167A54;':''}">${inc?'+ ':''}${money(e.amount)}</td><td>${esc(e.method)}</td><td>${esc(e.approvedBy)}</td>
-      <td class="cell-center">${admin ? `<button class="icon-btn" title="সংশোধন" onclick="openExpenseForm('','${e.id}')">✏️</button><button class="icon-btn danger" title="মুছুন" onclick="deleteExpense('${e.id}')">🗑️</button>` : '<span class="muted-cell">—</span>'}</td>
+      <td class="cell-center">${admin && isDateLocked(e.date) ? '<span title="এই মাস লক করা">🔒</span>' : admin ? `<button class="icon-btn" title="সংশোধন" onclick="openExpenseForm('','${e.id}')">✏️</button><button class="icon-btn danger" title="মুছুন" onclick="deleteExpense('${e.id}')">🗑️</button>` : '<span class="muted-cell">—</span>'}</td>
     </tr>`;
   }).join('') || `<tr><td colspan="8" class="empty-state">${CACHE.expenses.length ? 'কিছু পাওয়া যায়নি' : 'কোনো এন্ট্রি যোগ করা হয়নি'}</td></tr>`;
 }
+function expenseTotalsHtml(){
+  const list = CACHE.expenses.filter(e => EXP_MONTH==='all' || mOf(e.date)===EXP_MONTH);
+  const exp = list.filter(e=>e.kind!=='income').reduce((t,e)=>t+Number(e.amount||0),0);
+  const inc = list.filter(e=>e.kind==='income').reduce((t,e)=>t+Number(e.amount||0),0);
+  return `মোট খরচ: <b>${money(exp)}</b> · মোট আয় (কমিশন ইত্যাদি): <b>${money(inc)}</b>`;
+}
 function onExpenseSearch(){
   EXP_Q = document.getElementById('expSearch').value;
+  EXP_MONTH = document.getElementById('expMonth').value;
   document.getElementById('expBody').innerHTML = expenseRowsHtml();
+  document.getElementById('expTotals').innerHTML = expenseTotalsHtml();
 }
 function renderExpenses(){
   const admin = isAdmin();
@@ -1317,8 +1627,10 @@ function renderExpenses(){
         </div>
       </div>
       <div class="toolbar">
+        <select id="expMonth" onchange="onExpenseSearch()">${monthOptionsHtml(EXP_MONTH, true)}</select>
         <input type="search" id="expSearch" placeholder="🔍 ভাউচার নম্বর / ক্যাটাগরি / আইডি দিয়ে খুঁজুন" value="${esc(EXP_Q)}" oninput="onExpenseSearch()">
       </div>
+      <p id="expTotals" style="font-size:13px;margin:0 0 10px;">${expenseTotalsHtml()}</p>
       <div class="table-wrap"><table><thead><tr>
         <th>আইডি</th><th>তারিখ</th><th>ক্যাটাগরি</th><th>ভাউচার নং</th><th>পরিমাণ</th><th>মাধ্যম</th><th>অনুমোদনকারী / উৎস</th><th>একশন</th>
       </tr></thead><tbody id="expBody">${expenseRowsHtml()}</tbody></table></div>
@@ -1331,6 +1643,7 @@ function renderExpenses(){
 function openExpenseForm(kind, id){
   if(id && !isAdmin()){ alert('এন্ট্রি সংশোধন শুধু অ্যাডমিন করতে পারবেন।'); return; }
   const e = id ? CACHE.expenses.find(x=>x.id===id) : null;
+  if(e && !guardDate(e.date, 'সংশোধন')) return;
   const inc = e ? e.kind==='income' : kind==='income';
   EXP_EDIT_ID = id || ''; EXP_KIND = inc ? 'income' : '';
   let cats = inc ? INCOME_CATEGORIES : CACHE.settings.expenseCategories;
@@ -1367,6 +1680,7 @@ function saveExpense(){
   const voucherNo = document.getElementById('e_voucher').value.trim();
   if(!(amount>0)){ alert('পরিমাণ সঠিকভাবে দিন'); return; }
   if(inc && !voucherNo && !confirm('ভাউচার নম্বর দেওয়া হয়নি। তবুও সংরক্ষণ করবেন?')) return;
+  if(!guardDates([pickedDate('e_date'), id ? (CACHE.expenses.find(x=>x.id===id)||{}).date : ''], id ? 'সংশোধন' : 'এন্ট্রি')) return;
   const expenses = CACHE.expenses.slice();
   const data = {
     date: pickedDate('e_date'),
@@ -1386,13 +1700,15 @@ function saveExpense(){
     expenses.push(data);
   }
   saveCollection('expenses', expenses);
-  EXP_Q = '';
+  EXP_Q = ''; if(EXP_MONTH!=='all') EXP_MONTH = mOf(data.date) || EXP_MONTH;
   setFlash('expenses', `✅ ${inc?'আয়':'খরচ'} এন্ট্রি ${id?'সংশোধিত হয়েছে':'সংরক্ষিত হয়েছে'}${voucherNo?` — ভাউচার নং ${esc(voucherNo)}`:''}।`, savedId);
   renderExpenses();
   toTop();
 }
 function deleteExpense(id){
   if(!isAdmin()){ alert('এন্ট্রি মোছা শুধু অ্যাডমিন করতে পারবেন।'); return; }
+  const exr = CACHE.expenses.find(x=>x.id===id);
+  if(exr && !guardDate(exr.date, 'মুছে ফেলা')) return;
   if(!confirm('এই এন্ট্রিটি মুছে ফেলতে চান?')) return;
   saveCollection('expenses', CACHE.expenses.filter(e=>e.id!==id));
   renderExpenses();
@@ -1538,6 +1854,7 @@ function submitReturn(orderId){
   const order = {...orders[idx]};
   const items = orderItems(order).map(it=>({...it}));
   const reason = document.getElementById('ret_reason').value.trim();
+  if(!guardDates([order.date, pickedDate('ret_date')], 'রিটার্ন')) return;
   let anyReturned = false, overLimit = false;
   const newEntries = [];
 
@@ -1556,7 +1873,7 @@ function submitReturn(orderId){
         id: genId('RET-', returns.concat(newEntries)),
         date: pickedDate('ret_date'), orderId: order.id, customerName: order.customerName,
         productId: it.productId, qty: retQty, refundAmount: Math.round(refundAmount*100)/100, reason,
-        dq: r3(typed), du: oRet.label
+        dq: r3(typed), du: oRet.label, restocked: order.status==='Delivered'
       });
       it.qty = r3(Number(it.qty) - retQty);
       syncDisp(it, products.find(x=>x.id===it.productId));
@@ -1642,61 +1959,49 @@ function renderDiscounts(){
 let INV_SHOW_HIDDEN = false;
 function toggleInvHidden(chk){ INV_SHOW_HIDDEN = !!chk.checked; renderInventory(); }
 function renderInventory(){
-  const products = CACHE.products;
-  const purchases = CACHE.purchases;
-  const orders = CACHE.orders;
-  const returns = CACHE.returns;
-  const month = todayStr().slice(0,7);
-
-  const hiddenTotal = products.filter(p=>p.hidden).length;
-  const rows = products.filter(p=>INV_SHOW_HIDDEN || !p.hidden).map(p=>{
-    const purchasedThisMonth = purchases.filter(pu=>pu.productId===p.id && pu.date && pu.date.slice(0,7)===month)
-      .reduce((s,pu)=>s+Number(pu.qty||0),0);
-    const soldThisMonth = orders.filter(o=>o.status==='Delivered' && o.date && o.date.slice(0,7)===month)
-      .reduce((s,o)=> s + orderItems(o).filter(it=>it.productId===p.id).reduce((s2,it)=>s2+Number(it.qty||0),0), 0);
-    const returnedThisMonth = returns.filter(r=>r.productId===p.id && r.date && r.date.slice(0,7)===month)
-      .reduce((s,r)=>s+Number(r.qty||0),0);
-    const closingStock = Number(p.stock||0);
-    const openingStock = closingStock - purchasedThisMonth + soldThisMonth - returnedThisMonth;
-    const stockValue = closingStock * Number(p.cost||0);
-    return {p, openingStock, purchasedThisMonth, soldThisMonth, returnedThisMonth, closingStock, stockValue};
-  });
-  const totalValue = stockTotals().cost;
+  if(!monthsList().includes(VIEW_MONTH)) VIEW_MONTH = curMonth();
+  const month = VIEW_MONTH, d = monthData(month);
   const session = getSession();
   const canSeeValue = session.role==='admin';
-
+  const isCur = month===curMonth();
+  const rows = d.rows.filter(r => INV_SHOW_HIDDEN || !r[10]);
+  const hiddenTotal = d.rows.filter(r => r[10]).length;
   document.getElementById('pageContent').innerHTML = `
-    ${canSeeValue ? `<div class="stat-card" style="max-width:320px;margin-bottom:16px;">
-      <div class="label">বর্তমান মোট স্টকের মূল্য (ক্রয়মূল্যে)</div>
-      <div class="value">${money(totalValue)}</div>
+    <div class="toolbar"><label style="font-size:13px;font-weight:700;">মাস:</label>
+      <select onchange="onViewMonth(this)">${monthOptionsHtml(month, false)}</select></div>
+    ${monthStatusHtml(month)}
+    ${canSeeValue ? `<div class="grid grid-2" style="margin-bottom:16px;">
+      <div class="stat-card"><div class="label">মাসের শুরুর স্টকের মূল্য (জের, ক্রয়মূল্যে)</div><div class="value">${money(d.openVal)}</div></div>
+      <div class="stat-card"><div class="label">${isCur?'বর্তমান':'মাস শেষের'} স্টকের মূল্য (ক্রয়মূল্যে)</div><div class="value">${money(d.closeVal)}</div></div>
     </div>` : ''}
     <div class="panel">
       <div class="panel-head" style="flex-wrap:wrap;gap:8px;">
-        <h3>মাসিক ইনভেন্টরি রিপোর্ট — ${month}</h3>
+        <h3>মাসিক ইনভেন্টরি রিপোর্ট — ${monthLabel(month)}</h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button class="btn btn-accent btn-sm" onclick="printStockReport(false)">🖨️ স্টক রিপোর্ট প্রিন্ট (সব পণ্য)</button>
-          <button class="btn btn-outline btn-sm" onclick="printStockReport(true)">🖨️ শুধু স্টকে আছে এমন পণ্য</button>
+          ${(isCur || canSeeValue) ? `<button class="btn btn-accent btn-sm" onclick="printStockReport(false)">🖨️ স্টক রিপোর্ট প্রিন্ট (সব পণ্য)</button>
+          <button class="btn btn-outline btn-sm" onclick="printStockReport(true)">🖨️ শুধু স্টকে আছে এমন পণ্য</button>` : ''}
         </div>
       </div>
-      <p style="font-size:12.5px;color:var(--text-muted);">এই মাসের শুরুর স্টক, ক্রয়, বিক্রয়, রিটার্ন ও বর্তমান (ক্লোজিং) স্টক এক নজরে — ফিজিক্যাল গণনার সাথে মিলিয়ে দেখতে ব্যবহার করুন। কোনো পার্থক্য থাকলে বুঝবেন কোথাও এন্ট্রি বাদ পড়েছে বা স্টক ক্ষতিগ্রস্ত/চুরি হয়েছে।</p>
+      <p style="font-size:12.5px;color:var(--text-muted);">মাসের শুরুর স্টক = আগের মাসের শেষ স্টক (জের)। আগের মাসে পুরোনো তারিখে কোনো ক্রয়/বিক্রয় যোগ বা সংশোধন করলে পরের মাসের শুরুর স্টক নিজে থেকেই ঠিক হয়ে যায়। "সমন্বয়" = পণ্য তালিকা থেকে হাতে স্টক বদলানো/প্রারম্ভিক স্টক।</p>
       <div class="toolbar">
-        <span class="muted-cell">মোট পণ্য ${products.length}টি · রিপোর্টে দেখাচ্ছে ${rows.length}টি${hiddenTotal && !INV_SHOW_HIDDEN ? ` · <b>${hiddenTotal}টি পণ্য লুকানো</b> (রিপোর্টে আসছে না)` : ''}</span>
+        <span class="muted-cell">রিপোর্টে দেখাচ্ছে ${rows.length}টি পণ্য${hiddenTotal && !INV_SHOW_HIDDEN ? ` · <b>${hiddenTotal}টি লুকানো পণ্য</b> বাদ` : ''}</span>
         ${hiddenTotal ? `<label style="display:flex;gap:6px;align-items:center;font-size:13px;"><input type="checkbox" ${INV_SHOW_HIDDEN?'checked':''} onchange="toggleInvHidden(this)"> লুকানো পণ্যও দেখান</label>` : ''}
       </div>
       <div class="table-wrap"><table><thead><tr>
-        <th>পণ্য</th><th>মাসের শুরুর স্টক</th><th>+ক্রয়</th><th>−বিক্রয়</th><th>+রিটার্ন</th><th>=বর্তমান স্টক</th>
+        <th>পণ্য</th><th>মাসের শুরুর স্টক</th><th>+ক্রয়</th><th>−বিক্রয়</th><th>+রিটার্ন</th><th>±সমন্বয়</th><th>=${isCur?'বর্তমান':'শেষ'} স্টক</th>
         ${canSeeValue?'<th>স্টক মূল্য</th>':''}
       </tr></thead><tbody>
         ${rows.map(r=>`
           <tr>
-            <td>${esc(r.p.name)}${r.p.hidden ? ' <span class="badge badge-hidden">লুকানো</span>' : ''}</td>
-            <td class="cell-num">${r.openingStock} ${esc(r.p.unit||'কেজি')}</td>
-            <td class="cell-num">${r.purchasedThisMonth}</td>
-            <td class="cell-num">${r.soldThisMonth}</td>
-            <td class="cell-num">${r.returnedThisMonth}</td>
-            <td class="cell-num"><b>${r.closingStock} ${esc(r.p.unit||'কেজি')}</b></td>
-            ${canSeeValue?`<td class="cell-num">${money(r.stockValue)}</td>`:''}
-          </tr>`).join('') || `<tr><td colspan="7" class="empty-state">কোনো পণ্য নেই</td></tr>`}
+            <td>${esc(r[1])}${r[10] ? ' <span class="badge badge-hidden">লুকানো</span>' : ''}</td>
+            <td class="cell-num">${r[3]} ${esc(r[2])}</td>
+            <td class="cell-num">${r[4]}</td>
+            <td class="cell-num">${r[5]}</td>
+            <td class="cell-num">${r[6]}</td>
+            <td class="cell-num">${r[7]}</td>
+            <td class="cell-num"><b>${r[8]} ${esc(r[2])}</b></td>
+            ${canSeeValue?`<td class="cell-num">${money(r2(r[8]*r[9]))}</td>`:''}
+          </tr>`).join('') || `<tr><td colspan="8" class="empty-state">কোনো পণ্য নেই</td></tr>`}
       </tbody></table></div>
     </div>
   `;
@@ -1707,11 +2012,12 @@ function renderInventory(){
    Each shareholder's invested balance grows as they contribute;
    the dividend pool is split in proportion to that balance.
    ============================================================ */
-function renderShareholders(){
+let SH_Q = '';
+function shareholderTablesHtml(){
   const shareholders = CACHE.shareholders;
   const totalInvested = shareholders.reduce((s,sh)=>s+Number(sh.totalInvested||0),0);
-
-  const rows = shareholders.map(sh=>{
+  const q = SH_Q.trim().toLowerCase();
+  const rows = shareholders.filter(sh=>!q || String(sh.name).toLowerCase().includes(q) || String(sh.id).toLowerCase().includes(q)).map(sh=>{
     const pct = totalInvested>0 ? (Number(sh.totalInvested)/totalInvested*100) : 0;
     return `<tr>
       <td>${esc(sh.name)}</td>
@@ -1723,26 +2029,47 @@ function renderShareholders(){
       </td>
     </tr>`;
   }).join('');
-
-  const contribRows = CACHE.contributions.slice().reverse().slice(0,20).map(c=>{
+  let contribs = CACHE.contributions.slice().reverse().filter(c=>{
+    if(!q) return true;
+    const sh = shareholders.find(s=>s.id===c.shareholderId);
+    return String((sh&&sh.name)||'').toLowerCase().includes(q) || String(c.date||'').includes(q);
+  });
+  if(!q) contribs = contribs.slice(0,20);
+  const contribRows = contribs.map(c=>{
     const sh = shareholders.find(s=>s.id===c.shareholderId);
     return `<tr><td>${c.date}</td><td>${esc(sh?sh.name:'—')}</td><td class="cell-num">${money(c.amount)}</td></tr>`;
   }).join('');
-
+  return {
+    rows: rows || `<tr><td colspan="4" class="empty-state">${shareholders.length?'কিছু পাওয়া যায়নি':'কোনো শেয়ারহোল্ডার যোগ করা হয়নি'}</td></tr>`,
+    contribRows: contribRows || `<tr><td colspan="3" class="empty-state">${q?'কিছু পাওয়া যায়নি':'কোনো জমা এন্ট্রি নেই'}</td></tr>`
+  };
+}
+function onShareholderSearch(){
+  SH_Q = document.getElementById('shSearch').value;
+  const t = shareholderTablesHtml();
+  document.getElementById('shBody').innerHTML = t.rows;
+  document.getElementById('shContribBody').innerHTML = t.contribRows;
+  document.getElementById('shContribTitle').textContent = SH_Q.trim() ? 'জমার হিস্ট্রি (সার্চ ফলাফল)' : 'সাম্প্রতিক জমার হিস্ট্রি';
+}
+function renderShareholders(){
+  const t = shareholderTablesHtml();
   document.getElementById('pageContent').innerHTML = `
     <div class="panel">
       <div class="panel-head"><h3>শেয়ারহোল্ডার তালিকা ও বিনিয়োগ</h3>
         <button class="btn btn-accent btn-sm" onclick="openShareholderForm()">+ নতুন শেয়ারহোল্ডার</button>
       </div>
+      <div class="toolbar">
+        <input type="search" id="shSearch" placeholder="🔍 শেয়ারহোল্ডারের নাম দিয়ে খুঁজুন" value="${esc(SH_Q)}" oninput="onShareholderSearch()">
+      </div>
       <div class="table-wrap"><table><thead><tr>
         <th>নাম</th><th>মোট বিনিয়োগ</th><th>শেয়ারের হার</th><th>একশন</th>
-      </tr></thead><tbody>${rows || `<tr><td colspan="4" class="empty-state">কোনো শেয়ারহোল্ডার যোগ করা হয়নি</td></tr>`}</tbody></table></div>
+      </tr></thead><tbody id="shBody">${t.rows}</tbody></table></div>
       <p style="font-size:12px;color:var(--text-muted);margin-top:10px;">"লাভ-ক্ষতি" পেইজে মোট শেয়ারহোল্ডার লভ্যাংশ এই অনুপাত অনুযায়ীই প্রতিটা শেয়ারহোল্ডারের মধ্যে ভাগ হয়ে দেখানো হবে।</p>
     </div>
     <div class="panel">
-      <h3>সাম্প্রতিক জমার হিস্ট্রি</h3>
+      <h3 id="shContribTitle">${SH_Q.trim() ? 'জমার হিস্ট্রি (সার্চ ফলাফল)' : 'সাম্প্রতিক জমার হিস্ট্রি'}</h3>
       <div class="table-wrap"><table><thead><tr><th>তারিখ</th><th>শেয়ারহোল্ডার</th><th>জমার পরিমাণ</th></tr></thead>
-        <tbody>${contribRows || `<tr><td colspan="3" class="empty-state">কোনো জমা এন্ট্রি নেই</td></tr>`}</tbody></table></div>
+        <tbody id="shContribBody">${t.contribRows}</tbody></table></div>
     </div>
     <div id="modalHolder"></div>
   `;
@@ -1771,6 +2098,8 @@ function saveShareholder(){
   renderShareholders(); toTop();
 }
 function deleteShareholder(id){
+  const lockedC = CACHE.contributions.find(c => c.shareholderId===id && isDateLocked(c.date));
+  if(lockedC){ alert(`🔒 এই শেয়ারহোল্ডারের জমা এন্ট্রি ${monthLabel(mOf(lockedC.date))} মাসে আছে, যা লক করা — মোছা যাবে না।`); return; }
   if(!confirm('এই শেয়ারহোল্ডারকে মুছে ফেলতে চান?')) return;
   saveCollection('shareholders', CACHE.shareholders.filter(s=>s.id!==id));
   renderShareholders();
@@ -1796,6 +2125,7 @@ function openContributionForm(shareholderId){
 function saveContribution(shareholderId){
   const amount = Number(document.getElementById('c_amount').value||0);
   if(amount<=0){ alert('সঠিক পরিমাণ দিন'); return; }
+  if(!guardDate(pickedDate('c_date'), 'জমা এন্ট্রি')) return;
   const shareholders = CACHE.shareholders.slice();
   const idx = shareholders.findIndex(s=>s.id===shareholderId);
   shareholders[idx] = {...shareholders[idx], totalInvested: Number(shareholders[idx].totalInvested||0)+amount};
@@ -1810,59 +2140,63 @@ function saveContribution(shareholderId){
    PROFIT & LOSS (admin only)
    ============================================================ */
 function renderProfitLoss(){
-  const orders = CACHE.orders.filter(o=>o.status==='Delivered');
-  const products = CACHE.products;
-  const expenses = CACHE.expenses;
-  const settings = CACHE.settings;
-
-  const revenue = orders.reduce((s,o)=>s+Number(o.total||0),0);
-  const cogs = orders.reduce((s,o)=> s + orderItems(o).reduce((s2,it)=>{ const p=products.find(p=>p.id===it.productId); return s2+(p?p.cost:0)*Number(it.qty||0); },0), 0);
-  const grossProfit = revenue - cogs;
-  const totalExpenses = expenses.filter(e=>e.kind!=='income').reduce((s,e)=>s+Number(e.amount||0),0);
-  const otherIncome = expenses.filter(e=>e.kind==='income').reduce((s,e)=>s+Number(e.amount||0),0);
-  const netProfit = grossProfit + otherIncome - totalExpenses;
-  const dividendPool = netProfit>0 ? netProfit * (settings.dividendPercent/100) : 0;
-  const retainedShare = netProfit>0 ? netProfit - dividendPool : 0;
-  const retainedPercent = 100 - settings.dividendPercent;
-  const shareholders = CACHE.shareholders;
-  const totalInvested = shareholders.reduce((s,sh)=>s+Number(sh.totalInvested||0),0);
+  if(!monthsList().includes(VIEW_MONTH)) VIEW_MONTH = curMonth();
+  const m = VIEW_MONTH, idx = moveIndex(), d = monthData(m, idx);
+  const carry = carryForward(m, idx), carryEnd = r2(carry + d.retained);
+  const totalInvested = d.cap.reduce((t,c) => t + Number(c[2]||0), 0);
+  const retainedPercent = 100 - d.pct;
 
   document.getElementById('pageContent').innerHTML = `
+    <div class="toolbar"><label style="font-size:13px;font-weight:700;">মাস:</label>
+      <select onchange="onViewMonth(this)">${monthOptionsHtml(m, false)}</select></div>
+    ${monthStatusHtml(m)}
     <div class="grid grid-2">
       <div class="panel">
-        <h3>আয়-ব্যয় বিবরণী</h3>
+        <h3>আয়-ব্যয় বিবরণী — ${monthLabel(m)}</h3>
         <table>
-          <tr><td>মোট বিক্রয় (ডেলিভারড অর্ডার)</td><td class="cell-num">${money(revenue)}</td></tr>
-          <tr><td>বিক্রিত পণ্যের ক্রয়মূল্য (COGS)</td><td class="cell-num">${money(cogs)}</td></tr>
-          <tr><td><b>গ্রস প্রফিট</b></td><td class="cell-num"><b>${money(grossProfit)}</b></td></tr>
-          <tr><td>কমিশন / অন্যান্য আয়</td><td class="cell-num">+ ${money(otherIncome)}</td></tr>
-          <tr><td>মোট পরিচালন খরচ</td><td class="cell-num">${money(totalExpenses)}</td></tr>
+          <tr><td>মোট বিক্রয় (ডেলিভারড অর্ডার)</td><td class="cell-num">${money(d.revenue)}</td></tr>
+          <tr><td>বিক্রিত পণ্যের ক্রয়মূল্য (COGS)</td><td class="cell-num">${money(d.cogs)}</td></tr>
+          <tr><td><b>গ্রস প্রফিট</b></td><td class="cell-num"><b>${money(d.gross)}</b></td></tr>
+          <tr><td>কমিশন / অন্যান্য আয়</td><td class="cell-num">+ ${money(d.otherIncome)}</td></tr>
+          <tr><td>মোট পরিচালন খরচ</td><td class="cell-num">${money(d.expenses)}</td></tr>
         </table>
-        <div class="invoice-total-row"><span>নিট লাভ</span><span>${money(netProfit)}</span></div>
+        <div class="invoice-total-row"><span>নিট লাভ</span><span>${money(d.net)}</span></div>
       </div>
       <div class="panel">
         <h3>নিট লাভের বণ্টন</h3>
-        <p style="color:var(--text-muted);font-size:13.5px;">নিট লাভ থেকে বর্তমান নির্ধারিত হার অনুযায়ী স্বয়ংক্রিয় হিসাব:</p>
         <table>
-          <tr><td>লভ্যাংশ বণ্টনের হার</td><td class="cell-num">${settings.dividendPercent}%</td></tr>
-          <tr><td>নিট লাভ</td><td class="cell-num">${money(netProfit)}</td></tr>
+          <tr><td>লভ্যাংশ বণ্টনের হার</td><td class="cell-num">${d.pct}%</td></tr>
+          <tr><td>নিট লাভ</td><td class="cell-num">${money(d.net)}</td></tr>
         </table>
-        <div class="invoice-total-row"><span>শেয়ারহোল্ডার পুল (${settings.dividendPercent}%)</span><span>${money(dividendPool)}</span></div>
-        <div class="invoice-total-row" style="margin-top:8px;"><span>প্রতিষ্ঠানের নিজস্ব অংশ (${retainedPercent}%)</span><span>${money(retainedShare)}</span></div>
-        <p style="font-size:12px;color:var(--text-muted);margin-top:10px;">লভ্যাংশের হার পরিবর্তন করতে সেটিংস পেইজে যান।</p>
+        <div class="invoice-total-row"><span>শেয়ারহোল্ডার পুল (${d.pct}%)</span><span>${money(d.pool)}</span></div>
+        <div class="invoice-total-row" style="margin-top:8px;"><span>প্রতিষ্ঠানের নিজস্ব অংশ (${retainedPercent}%)</span><span>${money(d.net>0 ? d.retained : 0)}</span></div>
+        <p style="font-size:12px;color:var(--text-muted);margin-top:10px;">লভ্যাংশের হার পরিবর্তন করতে সেটিংস পেইজে যান।${d.locked?' (লক করা মাসে লক করার সময়ের হার ধরা আছে।)':''}</p>
       </div>
     </div>
     <div class="panel">
-      <h3>শেয়ারহোল্ডার অনুযায়ী লভ্যাংশ বণ্টন (বিনিয়োগের অনুপাতে)</h3>
+      <h3>জের ও মাস শেষের অবস্থা</h3>
+      <table>
+        <tr><td>মাসের শুরুর স্টকের মূল্য (আগের মাস থেকে জের)</td><td class="cell-num">${money(d.openVal)}</td></tr>
+        <tr><td>মাস শেষের স্টকের মূল্য</td><td class="cell-num">${money(d.closeVal)}</td></tr>
+        <tr><td>আগের মাসগুলোর জমা জের (প্রতিষ্ঠানের অংশ, ক্ষতি হলে বাদ)</td><td class="cell-num">${money(carry)}</td></tr>
+        <tr><td>+ এই মাসের প্রতিষ্ঠানের অংশ${d.net<0?' (ক্ষতি)':''}</td><td class="cell-num">${money(d.retained)}</td></tr>
+        <tr><td>এই মাসে নতুন কাস্টমার বকেয়া</td><td class="cell-num">${money(d.custDueNew)}</td></tr>
+        <tr><td>এই মাসে নতুন সরবরাহকারী বকেয়া</td><td class="cell-num">${money(d.supDueNew)}</td></tr>
+      </table>
+      <div class="invoice-total-row"><span>মাস শেষে মোট জমা জের (পরের মাসে যাবে)</span><span>${money(carryEnd)}</span></div>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">এই জের পরের মাসে নিজে থেকেই যোগ হয়। আগের মাসে পরে কোনো এন্ট্রি (পুরোনো তারিখে) দিলে পরের মাসের জের নিজে থেকেই ঠিক হয়ে যায়।</p>
+    </div>
+    <div class="panel">
+      <h3>শেয়ারহোল্ডার অনুযায়ী লভ্যাংশ বণ্টন — ${monthLabel(m)} (মাস শেষের জমার অনুপাতে)</h3>
       <div class="table-wrap"><table><thead><tr>
-        <th>শেয়ারহোল্ডার</th><th>মোট বিনিয়োগ</th><th>শেয়ারের হার</th><th>এই মাসের প্রাপ্য লভ্যাংশ</th>
+        <th>শেয়ারহোল্ডার</th><th>মোট জমা (মাস শেষে)</th><th>শেয়ারের হার</th><th>এই মাসের প্রাপ্য লভ্যাংশ</th>
       </tr></thead><tbody>
-        ${shareholders.length ? shareholders.map(sh=>{
-          const pct = totalInvested>0 ? Number(sh.totalInvested)/totalInvested : 0;
-          return `<tr><td>${esc(sh.name)}</td><td class="cell-num">${money(sh.totalInvested)}</td><td class="cell-num">${(pct*100).toFixed(1)}%</td><td class="cell-num">${money(dividendPool*pct)}</td></tr>`;
+        ${d.cap.length ? d.cap.map(c=>{
+          const pct = totalInvested>0 ? Number(c[2])/totalInvested : 0;
+          return `<tr><td>${esc(c[1])}</td><td class="cell-num">${money(c[2])}</td><td class="cell-num">${(pct*100).toFixed(1)}%</td><td class="cell-num">${money(d.pool*pct)}</td></tr>`;
         }).join('') : `<tr><td colspan="4" class="empty-state">এখনো কোনো শেয়ারহোল্ডার যোগ করা হয়নি — "শেয়ারহোল্ডার" পেইজ থেকে যোগ করুন</td></tr>`}
       </tbody></table></div>
-      <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">প্রতিটা শেয়ারহোল্ডারের অংশ = শেয়ারহোল্ডার পুল × (তার বিনিয়োগ ÷ সবার মোট বিনিয়োগ)। কেউ নতুন করে জমা দিলে এই হিসাব নিজে থেকেই আপডেট হয়ে যাবে।</p>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">প্রতিটা শেয়ারহোল্ডারের অংশ = শেয়ারহোল্ডার পুল × (তার জমা ÷ সবার মোট জমা)।</p>
     </div>
   `;
 }
@@ -2079,7 +2413,7 @@ function downloadBackup(){
     exportedAt: new Date().toISOString(),
     products: CACHE.products, orders: CACHE.orders, purchases: CACHE.purchases,
     expenses: CACHE.expenses, returns: CACHE.returns, shareholders: CACHE.shareholders,
-    contributions: CACHE.contributions, settings: CACHE.settings
+    contributions: CACHE.contributions, closings: CACHE.closings, settings: CACHE.settings
   };
   const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -2153,7 +2487,13 @@ function printStockReport(onlyInStock){
   const isAdmin = getSession().role==='admin';
   const priceOf = p => Number(isAdmin ? p.cost : p.retail) || 0;   // manager never sees cost price
   const priceLabel = isAdmin ? 'ক্রয়মূল্য' : 'বিক্রয়মূল্য';
-  const list = CACHE.products.filter(p => !p.hidden && (!onlyInStock || Number(p.stock) > 0))
+  const histMonth = (currentPage==='inventory' && VIEW_MONTH!==curMonth()) ? VIEW_MONTH : null;
+  let srcProducts = CACHE.products;
+  if(histMonth){
+    srcProducts = monthData(histMonth).rows.filter(r=>!r[10]).map(r=>{ const lp = CACHE.products.find(x=>x.id===r[0]) || {};
+      return {id:r[0], name:r[1], unit:r[2], stock:r[8], cost:r[9], retail:lp.retail||0, category:lp.category||'অন্যান্য', hidden:false}; });
+  }
+  const list = srcProducts.filter(p => !p.hidden && (!onlyInStock || Number(p.stock) > 0))
     .slice().sort((a,b) => String(a.category).localeCompare(String(b.category),'bn') || String(a.name).localeCompare(String(b.name),'bn'));
   if(!list.length){ alert('প্রিন্ট করার মতো কোনো পণ্য নেই।'); return; }
   let body = '', lastCat = null, n = 0, grand = 0, catSum = 0;
@@ -2174,7 +2514,7 @@ function printStockReport(onlyInStock){
         <img src="logo.jpg" alt="">
         <div><h3>Avera Mart — স্টক রিপোর্ট</h3>
         <div>${esc(CACHE.settings.businessAddress||'')}</div>
-        <div>তারিখ: ${dateStr} · ${onlyInStock?'শুধু স্টকে থাকা পণ্য':'সব চালু পণ্য'} · মোট ${list.length}টি পণ্য</div></div>
+        <div>${histMonth ? 'মাস শেষের স্টক: '+monthLabel(histMonth) : 'তারিখ: '+dateStr} · ${onlyInStock?'শুধু স্টকে থাকা পণ্য':'সব চালু পণ্য'} · মোট ${list.length}টি পণ্য</div></div>
       </div>
       <table>
         <thead><tr><th>ক্র.</th><th>পণ্যের নাম</th><th>একক</th><th>${priceLabel}/একক</th><th>স্টক</th><th>মোট টাকা</th><th>ফিজিক্যাল গণনা</th><th>পার্থক্য</th></tr></thead>
@@ -2197,7 +2537,7 @@ function restoreBackup(event){
   reader.onload = (e) => {
     try{
       const data = JSON.parse(e.target.result);
-      const labels = {products:'পণ্য', orders:'অর্ডার', purchases:'ক্রয়', expenses:'খরচ/আয়', returns:'রিটার্ন', shareholders:'শেয়ারহোল্ডার', contributions:'জমা'};
+      const labels = {products:'পণ্য', orders:'অর্ডার', purchases:'ক্রয়', expenses:'খরচ/আয়', returns:'রিটার্ন', shareholders:'শেয়ারহোল্ডার', contributions:'জমা', closings:'মাস ক্লোজিং'};
       const keys = Object.keys(labels).filter(k => Array.isArray(data[k]));
       if(!keys.length) throw new Error('not a backup');
       const summary = keys.map(k => `${labels[k]}: ${data[k].length}টি`).join(', ');
@@ -2246,7 +2586,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '২.২';
+const APP_VERSION = '২.৪';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{
