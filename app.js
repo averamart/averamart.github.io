@@ -396,6 +396,7 @@ const NAV_ITEMS = [
   {key:'dashboard', label:'ড্যাশবোর্ড', icon:'🏠', roles:['admin','manager']},
   {key:'products', label:'পণ্য তালিকা', icon:'📦', roles:['admin','manager']},
   {key:'orders', label:'অর্ডার ও সেলস', icon:'🛍️', roles:['admin','manager','delivery']},
+  {key:'leaflet', label:'অফার লিফলেট', icon:'📣', roles:['admin','manager']},
   {key:'purchases', label:'ক্রয় খাতা', icon:'🛒', roles:['admin','manager']},
   {key:'expenses', label:'খরচ খাতা', icon:'💸', roles:['admin','manager']},
   {key:'dues', label:'বকেয়া হিসাব', icon:'📒', roles:['admin','manager']},
@@ -405,7 +406,6 @@ const NAV_ITEMS = [
   {key:'profitloss', label:'লাভ-ক্ষতি', icon:'📊', roles:['admin']},
   {key:'closing', label:'মাস ক্লোজিং ও লক', icon:'🔒', roles:['admin']},
   {key:'stockcheck', label:'স্টক মূল্য যাচাই', icon:'🧮', roles:['admin']},
-  {key:'leaflet', label:'অফার লিফলেট', icon:'🛍️', roles:['admin','manager']},
   {key:'invoice', label:'ইনভয়েস', icon:'🧾', roles:['admin','manager','delivery']},
   {key:'settings', label:'সেটিংস', icon:'⚙️', roles:['admin']}
 ];
@@ -1331,6 +1331,10 @@ function dataUsageHtml(){
     usageRows().map(r => `<tr><td>${r.label}</td><td class="cell-num">${r.cnt}</td><td class="cell-num">${r.kb} KB</td><td class="cell-num" style="${r.pct>=70?'color:#B3261E;font-weight:700;':''}">${r.pct}%</td></tr>`).join('')
   }</tbody></table></div>`;
 }
+function leafletShortcut(){
+  if(!['admin','manager'].includes(getSession().role)) return '';
+  return `<div class="alert-strip" style="background:#E7F6EE;border-color:#BFE4D0;color:#145C40;">📣 <b>অফার লিফলেট</b> — পণ্যের ছবি ও অফার দিয়ে WhatsApp-এর জন্য লিফলেট বানান। <a href="#" onclick="go('leaflet');return false;" style="color:#145C40;font-weight:700;">খুলুন</a></div>`;
+}
 function safetyBanners(){
   if(!isAdmin()) return '';
   let h = '';
@@ -1377,7 +1381,7 @@ function renderDashboard(){
     cards = `<div class="stat-card"><div class="label">এই মাসের নিট লাভ</div><div class="value">${money(netProfit)}</div></div>` + cards;
   }
 
-  let html = closingBanner() + safetyBanners() + `<div class="grid grid-4">${cards}</div>`;
+  let html = closingBanner() + safetyBanners() + leafletShortcut() + `<div class="grid grid-4">${cards}</div>`;
 
   if(lowStock.length){
     html += `<div class="alert-strip">⚠️ কম স্টকে থাকা পণ্য: ${lowStock.map(p=>esc(p.name)).join('، ')}</div>`;
@@ -3437,7 +3441,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৩.৩';
+const APP_VERSION = '৩.৪';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{
