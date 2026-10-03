@@ -2,7 +2,7 @@
 // Network-first for the app's own files, so every GitHub update shows up straight away
 // when online; the saved copy is used only when offline. Firebase/Firestore traffic
 // (other domains) is never touched, so business data is never served stale.
-const CACHE = 'avera-mart-v12';
+const CACHE = 'avera-mart-v14';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'firebase-config.js', 'logo.jpg', 'icon-192.png', 'icon-512.png', 'manifest.json', 'manual.html'];
 
 self.addEventListener('install', (event) => {
