@@ -54,67 +54,91 @@ function initFirebase(){
 
 function docRef(name){ return db.collection(COLLECTION).doc(name); }
 
-function attachListeners(){
-  docRef('products').onSnapshot(snap => {
-    if(snap.exists){ CACHE.products = snap.data().items || []; }
-    else { docRef('products').set({items: DEFAULT_PRODUCTS}); CACHE.products = DEFAULT_PRODUCTS; }
-    LOADED.products = true; onCloudUpdate();
-  });
-  docRef('orders').onSnapshot(snap => {
-    if(snap.exists){ CACHE.orders = snap.data().items || []; }
-    else { docRef('orders').set({items: []}); CACHE.orders = []; }
-    LOADED.orders = true; onCloudUpdate();
-  });
-  docRef('purchases').onSnapshot(snap => {
-    if(snap.exists){ CACHE.purchases = snap.data().items || []; }
-    else { docRef('purchases').set({items: []}); CACHE.purchases = []; }
-    LOADED.purchases = true; onCloudUpdate();
-  });
-  docRef('expenses').onSnapshot(snap => {
-    if(snap.exists){ CACHE.expenses = snap.data().items || []; }
-    else { docRef('expenses').set({items: []}); CACHE.expenses = []; }
-    LOADED.expenses = true; onCloudUpdate();
-  });
-  docRef('returns').onSnapshot(snap => {
-    if(snap.exists){ CACHE.returns = snap.data().items || []; }
-    else { docRef('returns').set({items: []}); CACHE.returns = []; }
-    LOADED.returns = true; onCloudUpdate();
-  });
-  docRef('shareholders').onSnapshot(snap => {
-    if(snap.exists){ CACHE.shareholders = snap.data().items || []; }
-    else { docRef('shareholders').set({items: []}); CACHE.shareholders = []; }
-    LOADED.shareholders = true; onCloudUpdate();
-  });
-  docRef('contributions').onSnapshot(snap => {
-    if(snap.exists){ CACHE.contributions = snap.data().items || []; }
-    else { docRef('contributions').set({items: []}); CACHE.contributions = []; }
-    LOADED.contributions = true; onCloudUpdate();
-  });
-  docRef('closings').onSnapshot(snap => {
-    if(snap.exists){ CACHE.closings = snap.data().items || []; }
-    else { docRef('closings').set({items: []}); CACHE.closings = []; }
-    LOADED.closings = true; onCloudUpdate();
-  });
-  docRef('settings').onSnapshot(snap => {
+/* ---- ডেটা সুরক্ষা ----
+   ১) ক্যাশ (অফলাইন/ধীর নেট) থেকে "ডকুমেন্ট নেই" এলে আর ডেমো/খালি ডেটা লেখা হয় না — শুধু সার্ভার নিশ্চিত করলে তবেই নতুন ডেটা তৈরি হয়।
+   ২) প্রতিবার সার্ভার থেকে ডেটা এলে এই ডিভাইসে একটা "নিরাপদ কপি" থাকে; ডেটা হঠাৎ অস্বাভাবিক কমে গেলে সতর্কতা ও ফেরত আনার বাটন আসে। */
+const SAFE_COLS = ['products','orders','purchases','expenses','returns','shareholders','contributions','closings'];
+const SAFE_ALERT = {};
+function safeCopyUpdate(name, items){
+  try{
+    const raw = localStorage.getItem('AM_safe_'+name);
+    const prev = raw ? JSON.parse(raw) : null;
+    if(prev && prev.n >= 10 && items.length < prev.n*0.5){ SAFE_ALERT[name] = {prevN:prev.n, nowN:items.length, ts:prev.ts}; return; }
+    delete SAFE_ALERT[name];
+    localStorage.setItem('AM_safe_'+name, JSON.stringify({ts:Date.now(), n:items.length, items}));
+  }catch(e){}
+}
+function renderDataLossBar(){
+  let bar = document.getElementById('dataLossBar');
+  const names = Object.keys(SAFE_ALERT);
+  if(!names.length){ if(bar) bar.remove(); return; }
+  if(!bar){ bar = document.createElement('div'); bar.id = 'dataLossBar'; bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#B3261E;color:#fff;padding:12px 14px;font-size:13.5px;line-height:1.6;box-shadow:0 -2px 10px rgba(0,0,0,.3);'; document.body.appendChild(bar); }
+  const lbl = {products:'পণ্য',orders:'অর্ডার',purchases:'ক্রয়',expenses:'খরচ/আয়',returns:'রিটার্ন',shareholders:'শেয়ারহোল্ডার',contributions:'জমা',closings:'মাস ক্লোজিং'};
+  const detail = names.map(n => `${lbl[n]||n}: ${SAFE_ALERT[n].prevN}টি → ${SAFE_ALERT[n].nowN}টি`).join(' · ');
+  const when = fmtDT(new Date(SAFE_ALERT[names[0]].ts).toISOString());
+  bar.innerHTML = `⚠️ <b>ডেটা হঠাৎ অনেক কমে গেছে!</b> (${detail})<br>এই ডিভাইসে ${when}-এর নিরাপদ কপি আছে। ${isAdmin()?`<button onclick="restoreSafeCopy()" style="margin-top:6px;background:#fff;color:#B3261E;border:0;border-radius:6px;padding:7px 12px;font-weight:700;">⏪ নিরাপদ কপি থেকে ফেরত আনুন</button> <button onclick="dismissSafeAlert()" style="margin-top:6px;background:transparent;color:#fff;border:1px solid #fff;border-radius:6px;padding:7px 12px;">না, এটাই ঠিক</button>`:'অ্যাডমিনকে এখনই জানান।'}`;
+}
+function restoreSafeCopy(){
+  if(!isAdmin()) return;
+  const names = Object.keys(SAFE_ALERT);
+  if(!names.length || !confirm('এই ডিভাইসের নিরাপদ কপি থেকে কমে যাওয়া ডেটা ফেরত আনবেন?\n\n(এখনকার ডেটার একটা ব্যাকআপ আগে নিজে থেকেই ডাউনলোড হবে)')) return;
+  try{ downloadBackup(); }catch(e){}
+  FORCE_SAVE = true; setTimeout(()=>{ FORCE_SAVE = false; }, 30000);
+  names.forEach(n => { try{ const c = JSON.parse(localStorage.getItem('AM_safe_'+n)); if(c && Array.isArray(c.items)){ saveCollection(n, c.items); delete SAFE_ALERT[n]; } }catch(e){} });
+  renderDataLossBar(); onCloudUpdate();
+  alert('✅ ফেরত আনা হয়েছে। সংখ্যাগুলো একবার মিলিয়ে দেখুন।');
+}
+function dismissSafeAlert(){
+  if(!confirm('ডেটা ইচ্ছা করেই কমানো হয়ে থাকলে এগিয়ে যান — পুরোনো নিরাপদ কপি মুছে নতুন কপি রাখা হবে।')) return;
+  Object.keys(SAFE_ALERT).forEach(n => { try{ localStorage.removeItem('AM_safe_'+n); }catch(e){} delete SAFE_ALERT[n]; safeCopyUpdate(n, CACHE[n]||[]); });
+  renderDataLossBar();
+}
+function listenDoc(name, apply, seed, items){
+  let last = null;
+  docRef(name).onSnapshot({includeMetadataChanges:true}, snap => {
     if(snap.exists){
-      const data = snap.data();
-      // older deployments may not have the category lists yet — merge in the defaults once
-      const merged = {
-        dividendPercent: data.dividendPercent ?? CACHE.settings.dividendPercent,
-        productCategories: data.productCategories && data.productCategories.length ? data.productCategories : CACHE.settings.productCategories,
-        expenseCategories: data.expenseCategories && data.expenseCategories.length ? data.expenseCategories : CACHE.settings.expenseCategories,
-        businessAddress: data.businessAddress || CACHE.settings.businessAddress
-      };
-      CACHE.settings = merged;
-      if(!data.productCategories || !data.expenseCategories || !data.businessAddress) docRef('settings').set(merged);
-    } else { docRef('settings').set(CACHE.settings); }
-    LOADED.settings = true; onCloudUpdate();
+      const data = snap.data(), js = JSON.stringify(data);
+      if(js === last && LOADED[name]) return;      // শুধু মেটাডেটা বদলালে আবার রেন্ডার নয়
+      last = js;
+      apply(data);
+      if(!snap.metadata.fromCache && items) safeCopyUpdate(name, items(data));
+    } else {
+      if(snap.metadata.fromCache) return;           // ক্যাশের "নেই" বিশ্বাস করা যাবে না — সার্ভারের উত্তরের অপেক্ষা
+      seed();
+    }
+    LOADED[name] = true; onCloudUpdate(); renderDataLossBar();
+    if(allLoaded() && !BK_TRIED){ BK_TRIED = true; setTimeout(() => runServerBackup(false), 8000); }
+  }, err => {
+    const el = document.getElementById('loginStatus');
+    if(el) el.textContent = '⚠️ ডেটা লোড করা যায়নি (' + err.message + ')';
   });
-  docRef('users').onSnapshot(snap => {
-    if(snap.exists){ CACHE.users = snap.data(); }
-    else { docRef('users').set(CACHE.users); }
-    LOADED.users = true; onCloudUpdate();
-  });
+}
+function attachListeners(){
+  const arr = (name, seedItems) => listenDoc(name,
+    d => { CACHE[name] = d.items || []; },
+    () => { docRef(name).set({items: seedItems}); CACHE[name] = seedItems; },
+    d => d.items || []);
+  arr('products', DEFAULT_PRODUCTS);
+  ['orders','purchases','expenses','returns','shareholders','contributions','closings'].forEach(n => arr(n, []));
+  listenDoc('settings', data => {
+    // older deployments may not have the category lists yet — merge in the defaults once
+    const merged = {
+      dividendPercent: data.dividendPercent ?? CACHE.settings.dividendPercent,
+      productCategories: data.productCategories && data.productCategories.length ? data.productCategories : CACHE.settings.productCategories,
+      expenseCategories: data.expenseCategories && data.expenseCategories.length ? data.expenseCategories : CACHE.settings.expenseCategories,
+      businessAddress: data.businessAddress || CACHE.settings.businessAddress
+    };
+    CACHE.settings = merged;
+    if(!data.productCategories || !data.expenseCategories || !data.businessAddress) docRef('settings').set(merged);
+  }, () => { docRef('settings').set(CACHE.settings); });
+  listenDoc('users', data => { CACHE.users = data; }, () => { docRef('users').set(CACHE.users); });
+  // ১৫ সেকেন্ডেও সার্ভার থেকে সাড়া না এলে ব্যবহারকারীকে জানানো (ডেটা তৈরি/মোছা বন্ধ থাকে)
+  setTimeout(() => {
+    if(!allLoaded()){
+      const el = document.getElementById('loginStatus');
+      if(el) el.textContent = '⚠️ ইন্টারনেট সংযোগ দুর্বল — সার্ভার থেকে ডেটা আসেনি। নেট ঠিক হলে পেইজ রিফ্রেশ করুন। (নিরাপত্তার জন্য কোনো ডেটা তৈরি বা পরিবর্তন করা হচ্ছে না)';
+    }
+  }, 15000);
 }
 
 function allLoaded(){ return Object.values(LOADED).every(Boolean); }
@@ -142,9 +166,22 @@ function onCloudUpdate(){
 }
 
 /* ---------------- Firestore write helpers ---------------- */
-function saveCollection(name, arr){ CACHE[name] = arr; docRef(name).set({items: arr}); }
-function saveSettings(obj){ CACHE.settings = obj; docRef('settings').set(obj); }
-function saveUsers(obj){ CACHE.users = obj; docRef('users').set(obj); }
+let FORCE_SAVE = false;
+function saveFailed(name, err){ alert('⚠️ সার্ভারে সংরক্ষণ হয়নি (' + name + '): ' + (err && err.message || err) + '\n\nপেইজ রিফ্রেশ করবেন না। ইন্টারনেট ও Firebase নিয়ম (rules) দেখুন, তারপর আবার চেষ্টা করুন।'); }
+function saveCollection(name, arr){
+  const prev = CACHE[name] || [];
+  if(!FORCE_SAVE && prev.length >= 10 && arr.length < prev.length*0.5){
+    alert('🛑 নিরাপত্তা: একসাথে অর্ধেকের বেশি এন্ট্রি মুছে ফেলা হচ্ছিল (' + name + ': ' + prev.length + ' → ' + arr.length + '), তাই সংরক্ষণ আটকে দেওয়া হয়েছে। অল্প অল্প করে মুছুন।');
+    return false;
+  }
+  let size = 0; try{ size = JSON.stringify(arr).length; }catch(e){}
+  if(size > 980000){ alert('🛑 ' + name + '-এর ডেটা Firebase-এর ১ MB সীমায় পৌঁছে গেছে — সংরক্ষণ করা যাচ্ছে না। ডেভেলপারকে জানান (সেটিংস → ডেটা ব্যবহার দেখুন)।'); return false; }
+  CACHE[name] = arr;
+  docRef(name).set({items: arr}).catch(e => saveFailed(name, e));
+  return true;
+}
+function saveSettings(obj){ CACHE.settings = obj; docRef('settings').set(obj).catch(e => saveFailed('settings', e)); }
+function saveUsers(obj){ CACHE.users = obj; docRef('users').set(obj).catch(e => saveFailed('users', e)); }
 
 /* ---------------- Helpers ---------------- */
 function fmtBasis(p){ const n = Number(p&&p.priceBasis)||1; return n===1 ? '' : `${r3(n)} ${(p&&p.unit)||'কেজি'}`; }
@@ -357,7 +394,6 @@ const NAV_ITEMS = [
   {key:'returns', label:'রিটার্ন ও সমন্বয়', icon:'🔄', roles:['admin','manager']},
   {key:'discounts', label:'ডিসকাউন্ট রেজিস্টার', icon:'🏷️', roles:['admin','manager']},
   {key:'inventory', label:'ইনভেন্টরি রিপোর্ট', icon:'📋', roles:['admin','manager']},
-  {key:'shareholders', label:'শেয়ারহোল্ডার', icon:'💼', roles:['admin']},
   {key:'profitloss', label:'লাভ-ক্ষতি', icon:'📊', roles:['admin']},
   {key:'closing', label:'মাস ক্লোজিং ও লক', icon:'🔒', roles:['admin']},
   {key:'stockcheck', label:'স্টক মূল্য যাচাই', icon:'🧮', roles:['admin']},
@@ -530,8 +566,8 @@ function monthData(m, idx){
   d.month = m;
   d.gross = r2(d.revenue - d.cogs);
   d.net = r2(d.gross + d.otherIncome - d.expenses);
-  d.pool = d.net>0 ? r2(d.net * d.pct / 100) : 0;
-  d.retained = r2(d.net - d.pool);
+  d.pool = 0;
+  d.retained = d.net;   // শেয়ারহোল্ডার বণ্টন নেই — পুরো নিট লাভই জের হিসেবে যায়
   return d;
 }
 function carryForward(m, idx){
@@ -562,7 +598,7 @@ function lockMonth(m){
   const earlier = monthsList().filter(x => x < m && !isMonthLocked(x));
   if(earlier.length){ alert(`আগে ${monthLabel(earlier[0])} মাস লক করুন — মাস লক করতে হয় ক্রমানুসারে (পুরোনো থেকে নতুন)।`); return; }
   const f = monthData(m);
-  if(!confirm(`${monthLabel(m)} মাসের হিসাব ক্লোজ ও লক করবেন?\n\nবিক্রয়: ${money(f.revenue)}\nনিট লাভ: ${money(f.net)}\nমাস শেষের স্টকের মূল্য: ${money(f.closeVal)}\n\nলক করলে এই মাসের তারিখে কোনো অর্ডার/ক্রয়/খরচ/আয়/জমা যোগ, সংশোধন বা মোছা যাবে না। মাস শেষের স্টক, লাভ ও জমা পরের মাসে জের হিসেবে যোগ হবে।`)) return;
+  if(!confirm(`${monthLabel(m)} মাসের হিসাব ক্লোজ ও লক করবেন?\n\nবিক্রয়: ${money(f.revenue)}\nনিট লাভ: ${money(f.net)}\nমাস শেষের স্টকের মূল্য: ${money(f.closeVal)}\n\nলক করলে এই মাসের তারিখে কোনো অর্ডার/ক্রয়/খরচ/আয় যোগ, সংশোধন বা মোছা যাবে না। মাস শেষের স্টক ও নিট প্রফিট পরের মাসে জের হিসেবে যোগ হবে।`)) return;
   const now = new Date().toISOString();
   const old = closingRec(m) || {};
   const list = (CACHE.closings||[]).filter(c => c.month !== m);
@@ -597,8 +633,6 @@ function closingBanner(){
 }
 function renderClosing(){
   const cur = curMonth(), ml = monthsList(), idx = moveIndex();
-  const capitalNow = CACHE.shareholders.reduce((t,sh) => t + Number(sh.totalInvested||0), 0);
-  const capitalAtStart = r2(capitalNow - CACHE.contributions.filter(c => mOf(c.date) >= cur).reduce((t,c) => t + Number(c.amount||0), 0));
   const cd = monthData(cur, idx);
   const oldCust = CACHE.orders.filter(o => o.status!=='Cancelled' && mOf(o.date) < cur).reduce((t,o) => t + orderDue(o), 0);
   const oldSup = CACHE.purchases.filter(pu => mOf(pu.date) < cur).reduce((t,pu) => t + purchaseDue(pu), 0);
@@ -629,8 +663,7 @@ function renderClosing(){
       <h3>চলমান মাস (${monthLabel(cur)}) — আগের মাস থেকে যা জের হিসেবে এসেছে</h3>
       <table>
         <tr><td>মাসের শুরুর স্টকের মূল্য (ক্রয়মূল্যে)</td><td class="cell-num">${money(cd.openVal)}</td></tr>
-        <tr><td>আগের মাসগুলোর জমা জের (প্রতিষ্ঠানের নিজস্ব অংশ)</td><td class="cell-num">${money(carryForward(cur, idx))}</td></tr>
-        <tr><td>শেয়ারহোল্ডারদের মোট জমা (মাসের শুরুতে)</td><td class="cell-num">${money(capitalAtStart)}</td></tr>
+        <tr><td>আগের মাসগুলোর জমা নিট লাভ (জের)</td><td class="cell-num">${money(carryForward(cur, idx))}</td></tr>
         <tr><td>আগের মাসগুলোর কাস্টমার বকেয়া (এখনো বাকি)</td><td class="cell-num">${money(oldCust)}</td></tr>
         <tr><td>আগের মাসগুলোর সরবরাহকারী বকেয়া (এখনো বাকি)</td><td class="cell-num">${money(oldSup)}</td></tr>
       </table>
@@ -638,7 +671,7 @@ function renderClosing(){
     </div>
     <div class="panel">
       <h3>মাসভিত্তিক ক্লোজিং</h3>
-      <p style="font-size:12.5px;color:var(--text-muted);">মাস শেষ হলে হিসাব মিলিয়ে "ক্লোজ ও লক করুন" চাপুন। লক করা মাসের তারিখে কোনো অর্ডার, ক্রয়, খরচ/আয় বা শেয়ারহোল্ডার জমা যোগ, সংশোধন বা মোছা যায় না। লক ক্রমানুসারে (পুরোনো থেকে নতুন) করতে হয়।</p>
+      <p style="font-size:12.5px;color:var(--text-muted);">মাস শেষ হলে হিসাব মিলিয়ে "ক্লোজ ও লক করুন" চাপুন। লক করা মাসের তারিখে কোনো অর্ডার, ক্রয়, খরচ/আয় যোগ, সংশোধন বা মোছা যায় না। লক ক্রমানুসারে (পুরোনো থেকে নতুন) করতে হয়।</p>
       <div class="table-wrap"><table><thead><tr>
         <th>মাস</th><th>অবস্থা</th><th>বিক্রয়</th><th>নিট লাভ</th><th>মাস শেষের স্টক মূল্য</th><th>একশন</th><th>রিপোর্ট</th>
       </tr></thead><tbody>${rows}</tbody></table></div>
@@ -649,6 +682,44 @@ function renderClosing(){
         ${logs.slice(0,20).map(l => `<tr><td>${fmtDT(l.t)}</td><td>${monthLabel(l.month)}</td><td>${l.a==='lock'?'🔒 লক':'🔓 আনলক'}</td><td>${esc(l.why||'')}</td></tr>`).join('') || '<tr><td colspan="4" class="empty-state">এখনো কোনো মাস লক করা হয়নি</td></tr>'}
       </tbody></table></div>
     </div>`;
+}
+
+/* ============================================================
+   AVERAGE COST — পণ্যের ক্রয়মূল্য = সেই পণ্যের সব ক্রয় ভাউচারের (মোট খরচ ÷ মোট পরিমাণ)
+   প্রতিটি ক্রয় এন্ট্রি/সংশোধন/মোছা/এক্সেল আপলোডে নিজে থেকে হিসাব হয়, তাই ভাউচারের সাথে সফটওয়্যারের দাম মিলে যায়।
+   ============================================================ */
+function avgCostOf(purchases, pid){
+  let q = 0, c = 0;
+  purchases.forEach(pu => { if(pu.productId===pid && Number(pu.qty)>0){ q += Number(pu.qty); c += Number(pu.totalCost||0); } });
+  return (q>0 && c>0) ? Math.round(c/q*10000)/10000 : null;
+}
+function applyAvgCosts(products, purchases, ids){
+  (ids||[]).forEach(pid => {
+    if(!pid) return;
+    const i = products.findIndex(p => p.id===pid); if(i<0) return;
+    const a = avgCostOf(purchases, pid);
+    if(a!==null) products[i] = {...products[i], cost: a};
+  });
+}
+function avgCostPlan(){
+  const list = [];
+  CACHE.products.forEach(p => {
+    const a = avgCostOf(CACHE.purchases, p.id);
+    if(a!==null && Math.abs(a - Number(p.cost||0)) > 0.0005) list.push({p, oldCost:Number(p.cost||0), newCost:a});
+  });
+  const valBefore = CACHE.products.reduce((t,p) => t + Math.max(0,Number(p.stock||0))*Number(p.cost||0), 0);
+  const map = {}; list.forEach(x => { map[x.p.id] = x.newCost; });
+  const valAfter = CACHE.products.reduce((t,p) => t + Math.max(0,Number(p.stock||0))*(map[p.id]!==undefined ? map[p.id] : Number(p.cost||0)), 0);
+  return {list, valBefore:r2(valBefore), valAfter:r2(valAfter)};
+}
+function applyAvgCostsAll(){
+  if(!isAdmin()){ alert('শুধু অ্যাডমিন করতে পারবেন'); return; }
+  const plan = avgCostPlan();
+  if(!plan.list.length){ alert('সব পণ্যের ক্রয়মূল্য আগেই ভাউচার গড়ের সাথে মিলে আছে।'); return; }
+  if(!confirm(`${plan.list.length}টি পণ্যের ক্রয়মূল্য ক্রয় খাতার ভাউচার গড় অনুযায়ী বদলাবে।\\n\\nমোট স্টক মূল্য: ${money(plan.valBefore)} → ${money(plan.valAfter)}\\n\\nনোট: যেসব পণ্যের ক্রয় এন্ট্রি নেই সেগুলো অপরিবর্তিত থাকবে। লক করা মাসের হিসাব বদলাবে না; লক না করা মাসের লাভ নতুন ক্রয়মূল্যে আবার হিসাব হবে। এগিয়ে যাবেন?`)) return;
+  const products = CACHE.products.map(p => ({...p}));
+  applyAvgCosts(products, CACHE.purchases, plan.list.map(x => x.p.id));
+  if(saveCollection('products', products)){ alert(`✅ ${plan.list.length}টি পণ্যের ক্রয়মূল্য ঠিক হয়েছে।`); renderStockCheck(); }
 }
 
 /* ============================================================
@@ -757,6 +828,11 @@ function renderStockCheck(){
       <div class="invoice-total-row"><span>= মোট স্টক মূল্য (ক্রয়মূল্যে)</span><span>${money(d.totCost)}</span></div>
       <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">যে লাইনে সবচেয়ে বড় সংখ্যা সেটাই পার্থক্যের মূল কারণ।</p>
     </div>
+    ${(() => { const pl = avgCostPlan(); return pl.list.length ? `<div class="panel"><h3>ক্রয়মূল্য ভাউচারের সাথে মেলান</h3>
+      <p style="font-size:12.5px;color:var(--text-muted);">${pl.list.length}টি পণ্যের ক্রয়মূল্য ক্রয় খাতার ভাউচার গড়ের (মোট খরচ ÷ মোট পরিমাণ) সাথে মিলছে না। ঠিক করলে স্টক মূল্য <b>${money(pl.valBefore)}</b> থেকে <b>${money(pl.valAfter)}</b> হবে। এরপর থেকে প্রতিটি ক্রয় এন্ট্রিতে এই দাম নিজে থেকেই ঠিক হবে।</p>
+      <div class="table-wrap"><table><thead><tr><th>পণ্য</th><th>এখনকার ক্রয়মূল্য</th><th>ভাউচার গড়</th></tr></thead><tbody>${pl.list.slice(0,25).map(x=>`<tr><td>${esc(x.p.name)}</td><td class="cell-num">${money(x.oldCost)}</td><td class="cell-num"><b>${money(x.newCost)}</b></td></tr>`).join('')}</tbody></table></div>
+      ${pl.list.length>25?`<p class="muted-cell">আরও ${pl.list.length-25}টি আছে</p>`:''}
+      <button class="btn btn-primary" style="margin-top:10px;" onclick="applyAvgCostsAll()">🔄 সব পণ্যের ক্রয়মূল্য ভাউচার গড় অনুযায়ী ঠিক করুন</button></div>` : ''; })()}
     ${d.mism.length ? `<div class="panel"><h3>যেসব পণ্যের স্টক ক্রয়-বিক্রয়ের রেকর্ডের সাথে মিলছে না</h3>
       <p style="font-size:12.5px;color:var(--text-muted);">"রেকর্ড অনুযায়ী" = ক্রয় − বিক্রয় + রিটার্ন + লগ করা সমন্বয়। "পার্থক্য" মানে এই পরিমাণ স্টক রেকর্ড ছাড়া আছে (পণ্য খোলার সময় বা এক্সেল/পণ্য তালিকা থেকে বসানো)। যদি ভাউচারে এই মাল কেনা হয়ে থাকে, তাহলে ক্রয় খাতায় এন্ট্রি দিন — অথবা স্টক ভুল থাকলে পণ্য তালিকায় সঠিক করুন।</p>
       <div class="table-wrap"><table><thead><tr><th>পণ্য</th><th>বর্তমান স্টক</th><th>রেকর্ড অনুযায়ী</th><th>পার্থক্য</th><th>মূল্য (ক্রয়)</th></tr></thead><tbody>
@@ -771,6 +847,103 @@ function renderStockCheck(){
       <tbody id="scBody">${scRowsHtml(d)}</tbody></table></div>
     </div>`;
   onScVoucher();
+}
+
+/* ============================================================
+   SERVER BACKUP — সার্ভারে আলাদা কপি (averamart_backups), ডেটা ব্যবহার, সাপ্তাহিক রিমাইন্ডার
+   ============================================================ */
+const BK = 'averamart_backups';
+const BK_NAMES = ['products','orders','purchases','expenses','returns','shareholders','contributions','closings','settings','users'];
+let BK_TRIED = false, BK_STATE = {ok:null, tag:'', err:''};
+function bkStatusText(){
+  if(BK_STATE.ok===true) return `✅ সর্বশেষ সার্ভার ব্যাকআপ: <b>${esc(BK_STATE.tag)}</b>`;
+  if(BK_STATE.ok===false) return `⚠️ ব্যাকআপ লেখা যায়নি: ${esc(BK_STATE.err)} — Firebase rules আপডেট করুন (FIREBASE-RULES.txt দেখুন)।`;
+  return 'আজকের ব্যাকআপ যাচাই হচ্ছে...';
+}
+function bkUpdateStatus(){ const el = document.getElementById('bkStatus'); if(el) el.innerHTML = bkStatusText(); }
+async function runServerBackup(force){
+  try{
+    if(!db) return;
+    if(!allLoaded()){ if(force) alert('ডেটা এখনো লোড হয়নি'); return; }
+    if(Object.keys(SAFE_ALERT).length){ if(force) alert('ডেটা সন্দেহজনকভাবে কমে আছে — এই অবস্থায় ব্যাকআপ নেওয়া হচ্ছে না।'); return; }
+    const day = todayStr(), col = db.collection(BK);
+    const hhmm = new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Dhaka',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date()).replace(':','');
+    const tag = force ? `${day}T${hhmm}` : day;
+    if(!force){
+      const meta = await col.doc(tag+'__meta').get();
+      if(meta.exists){ BK_STATE = {ok:true, tag, err:''}; bkUpdateStatus(); return; }
+    }
+    const month = day.slice(0,7);
+    const had = await col.where('kind','==','meta').where('month','==',month).limit(1).get();
+    const keep = had.empty;
+    const counts = {};
+    for(const name of BK_NAMES){
+      const payload = (name==='settings'||name==='users') ? CACHE[name] : {items: CACHE[name]||[]};
+      counts[name] = (name==='settings'||name==='users') ? 1 : (CACHE[name]||[]).length;
+      await col.doc(`${tag}__${name}`).set({kind:'data', tag, day, src:name, json:JSON.stringify(payload), n:counts[name], keep, ts:firebase.firestore.FieldValue.serverTimestamp()});
+    }
+    await col.doc(tag+'__meta').set({kind:'meta', tag, day, month, counts, keep, ts:firebase.firestore.FieldValue.serverTimestamp()});
+    BK_STATE = {ok:true, tag, err:''}; bkUpdateStatus();
+    if(force) alert('✅ সার্ভার ব্যাকআপ নেওয়া হয়েছে: ' + tag);
+    // ৬০ দিনের পুরোনো দৈনিক কপি মুছে ফেলা (মাসিক কপি থাকে)
+    try{
+      const old = await col.where('ts','<', new Date(Date.now()-60*864e5)).limit(300).get();
+      old.forEach(d => { const x = d.data(); if(!x.keep) d.ref.delete().catch(()=>{}); });
+    }catch(e){}
+  }catch(e){
+    BK_STATE = {ok:false, tag:'', err:(e && e.message) || String(e)}; bkUpdateStatus();
+    if(force) alert('⚠️ ব্যাকআপ নেওয়া যায়নি: ' + BK_STATE.err);
+  }
+}
+async function loadServerBackups(){
+  const box = document.getElementById('bkList'); if(!box) return;
+  box.innerHTML = 'লোড হচ্ছে...';
+  try{
+    const snap = await db.collection(BK).where('kind','==','meta').get();
+    const list = []; snap.forEach(d => list.push(d.data()));
+    list.sort((a,b) => String(b.tag).localeCompare(String(a.tag)));
+    if(!list.length){ box.innerHTML = '<span class="muted-cell">এখনো কোনো সার্ভার ব্যাকআপ নেই</span>'; return; }
+    box.innerHTML = `<div class="table-wrap"><table><thead><tr><th>তারিখ</th><th>পণ্য</th><th>অর্ডার</th><th>ক্রয়</th><th>খরচ</th><th></th></tr></thead><tbody>${
+      list.slice(0,60).map(m => `<tr><td>${esc(m.tag)}${m.keep?' 📌':''}</td><td class="cell-num">${(m.counts||{}).products||0}</td><td class="cell-num">${(m.counts||{}).orders||0}</td><td class="cell-num">${(m.counts||{}).purchases||0}</td><td class="cell-num">${(m.counts||{}).expenses||0}</td><td><button class="btn btn-outline btn-sm" onclick="restoreServerBackup('${esc(m.tag)}')">⏪ ফেরত আনুন</button></td></tr>`).join('')
+    }</tbody></table></div><p class="muted-cell" style="font-size:12px;">📌 = মাসিক কপি (চিরকাল থাকে)</p>`;
+  }catch(e){ box.innerHTML = '<span style="color:#B3261E;">তালিকা আনা যায়নি: ' + esc(e.message||e) + '</span>'; }
+}
+async function restoreServerBackup(tag){
+  if(!isAdmin()){ alert('শুধু অ্যাডমিন ফেরত আনতে পারবেন'); return; }
+  try{
+    const snap = await db.collection(BK).where('tag','==',tag).get();
+    const data = {}; snap.forEach(d => { const x = d.data(); if(x.kind==='data') { try{ data[x.src] = JSON.parse(x.json); }catch(e){} } });
+    const names = ['products','orders','purchases','expenses','returns','shareholders','contributions','closings'].filter(n => data[n] && Array.isArray(data[n].items));
+    if(!names.length){ alert('এই ব্যাকআপে ডেটা পাওয়া যায়নি'); return; }
+    const sum = names.map(n => `${n}: ${data[n].items.length}টি`).join('\n');
+    if(!confirm(`${tag}-এর ব্যাকআপ থেকে ফেরত আনবেন?\n\n${sum}\n\nবর্তমান ডেটা এই ডেটা দিয়ে প্রতিস্থাপিত হবে (পিন অপরিবর্তিত থাকবে)। আগে বর্তমান ডেটার একটা ফাইল ব্যাকআপ নিজে থেকে নামবে।`)) return;
+    try{ downloadBackup(); }catch(e){}
+    FORCE_SAVE = true;
+    names.forEach(n => saveCollection(n, data[n].items));
+    if(data.settings) saveSettings({...CACHE.settings, ...data.settings});
+    setTimeout(() => { FORCE_SAVE = false; }, 30000);
+    alert('✅ ফেরত আনা হয়েছে। সংখ্যাগুলো মিলিয়ে দেখুন।'); go('dashboard');
+  }catch(e){ alert('ফেরত আনা যায়নি: ' + (e.message||e)); }
+}
+const USAGE_NAMES = {products:'পণ্য', orders:'অর্ডার', purchases:'ক্রয়', expenses:'খরচ/আয়', returns:'রিটার্ন', closings:'মাস ক্লোজিং'};
+function usageRows(){
+  return Object.keys(USAGE_NAMES).map(n => { let b = 0; try{ b = new Blob([JSON.stringify(CACHE[n]||[])]).size; }catch(e){} return {n, label:USAGE_NAMES[n], kb: Math.round(b/1024), pct: Math.round(b/1048576*100), cnt:(CACHE[n]||[]).length}; });
+}
+function dataUsageHtml(){
+  return `<div class="table-wrap"><table><thead><tr><th>তথ্য</th><th>সংখ্যা</th><th>আকার</th><th>সীমার %</th></tr></thead><tbody>${
+    usageRows().map(r => `<tr><td>${r.label}</td><td class="cell-num">${r.cnt}</td><td class="cell-num">${r.kb} KB</td><td class="cell-num" style="${r.pct>=70?'color:#B3261E;font-weight:700;':''}">${r.pct}%</td></tr>`).join('')
+  }</tbody></table></div>`;
+}
+function safetyBanners(){
+  if(!isAdmin()) return '';
+  let h = '';
+  const last = Number(localStorage.getItem('AM_lastDownload')||0);
+  const days = last ? Math.floor((Date.now()-last)/864e5) : 999;
+  if(days >= 7) h += `<div class="alert-strip" style="background:#EEF1F6;border-color:#D5DCE8;color:var(--navy);">💾 ${last?days+' দিন':'অনেক দিন'} ধরে ব্যাকআপ ফাইল ডাউনলোড করা হয়নি। <a href="#" onclick="downloadBackup();go('dashboard');return false;" style="color:var(--navy);font-weight:700;">এখনই ডাউনলোড করুন</a></div>`;
+  if(BK_STATE.ok===false) h += `<div class="alert-strip" style="background:#FDE8E8;border-color:#F4B8B4;color:#B3261E;">☁️ সার্ভার ব্যাকআপ চলছে না (${esc(BK_STATE.err)}) — FIREBASE-RULES.txt অনুযায়ী Firebase rules আপডেট করুন।</div>`;
+  const big = usageRows().filter(r => r.pct >= 70);
+  if(big.length) h += `<div class="alert-strip" style="background:#FDE8E8;border-color:#F4B8B4;color:#B3261E;">📦 ডেটা সীমার কাছাকাছি: ${big.map(r=>r.label+' '+r.pct+'%').join(', ')} — সেটিংস → ডেটা ব্যবহার দেখুন, ডেভেলপারকে জানান।</div>`;
+  return h;
 }
 
 /* ============================================================
@@ -807,7 +980,7 @@ function renderDashboard(){
     cards = `<div class="stat-card"><div class="label">এই মাসের নিট লাভ</div><div class="value">${money(netProfit)}</div></div>` + cards;
   }
 
-  let html = closingBanner() + `<div class="grid grid-4">${cards}</div>`;
+  let html = closingBanner() + safetyBanners() + `<div class="grid grid-4">${cards}</div>`;
 
   if(lowStock.length){
     html += `<div class="alert-strip">⚠️ কম স্টকে থাকা পণ্য: ${lowStock.map(p=>esc(p.name)).join('، ')}</div>`;
@@ -1044,7 +1217,7 @@ function openProductForm(id){
           <input id="f_basis" type="number" step="any" min="0" value="${p?(Number(p.priceBasis)||1):1}" oninput="updatePriceHint()">
           <span class="muted-cell" style="font-size:11.5px;">১ কেজির দাম হলে ১ রাখুন। ৫ কেজির দাম হলে ৫ লিখুন — তখন ক্রয়মূল্য ও বিক্রয়মূল্য ৫ কেজির দাম বসাবেন, সিস্টেম নিজে প্রতি একক হিসাব করে নেবে।</span>
         </div>
-        ${isAdmin?`<div class="form-field"><label>ক্রয়মূল্য (৳) — <span class="basis-lbl"></span></label><input id="f_cost" type="number" step="any" value="${p?packPrice(p,'cost'):''}" oninput="updatePriceHint()"></div>`:''}
+        ${isAdmin?`<div class="form-field"><label>ক্রয়মূল্য (৳) — <span class="basis-lbl"></span></label><input id="f_cost" type="number" step="any" value="${p?packPrice(p,'cost'):''}" oninput="updatePriceHint()"><span class="muted-cell" style="font-size:11.5px;">ক্রয় এন্ট্রি থাকলে এই দাম প্রতিবার ভাউচার গড় অনুযায়ী নিজে থেকে বদলায়।</span></div>`:''}
         <div class="form-field"><label>বিক্রয়মূল্য (৳) — <span class="basis-lbl"></span></label><input id="f_retail" type="number" step="any" value="${p?packPrice(p,'retail'):''}" oninput="updatePriceHint()"></div>
         <div class="form-field" style="grid-column:1/-1;"><div id="f_pricehint" class="flash" style="margin:0;"></div></div>
         <div class="form-field"><label>বর্তমান স্টক (এককে)</label><input id="f_stock" type="number" value="${p?p.stock:0}"></div>
@@ -1465,7 +1638,7 @@ function purchaseRowsHtml(){
     if(PU_PAY==='Due' && pu.paymentStatus==='Paid') return false;
     if(!q) return true;
     const prod = products.find(p=>p.id===pu.productId);
-    return [pu.id, pu.supplier, pu.productName, prod&&prod.name, pu.date].some(v=>String(v||'').toLowerCase().includes(q));
+    return [pu.id, pu.supplier, pu.voucherNo, pu.productName, prod&&prod.name, pu.date].some(v=>String(v||'').toLowerCase().includes(q));
   });
   let rows = purchases.slice().reverse().map(pu => {
     const freeQty = Number(pu.freeQty||0);
@@ -1474,7 +1647,7 @@ function purchaseRowsHtml(){
     const unit = esc(prod?.unit || 'কেজি');
     return `
     <tr class="${hlClass('purchases',pu.id)}">
-      <td>${pu.id} ${editedBadge(pu)}</td><td>${pu.date}</td><td>${esc(pu.supplier)}</td>
+      <td>${pu.id} ${editedBadge(pu)}</td><td>${pu.date}</td><td>${pu.voucherNo?esc(pu.voucherNo):'<span class="muted-cell">—</span>'}</td><td>${esc(pu.supplier)}</td>
       <td>${esc(prod?prod.name:(pu.productName||'—'))}</td>
       <td class="cell-num">${pu.qty} ${unit}${freeQty>0 ? ` <span class="badge" style="background:#DCF3E7;color:#167A54;">${freeQty} ফ্রি</span>` : ''}</td>
       <td class="cell-num">${money(pu.totalCost)}</td>
@@ -1483,7 +1656,7 @@ function purchaseRowsHtml(){
       <td class="cell-center">${admin && isDateLocked(pu.date) ? '<span title="এই মাস লক করা">🔒</span>' : admin ? `<button class="icon-btn" title="ভুল সংশোধন করুন" onclick="openPurchaseForm('${pu.id}')">✏️</button><button class="icon-btn danger" title="মুছুন" onclick="deletePurchase('${pu.id}')">🗑️</button>` : '<span class="muted-cell">—</span>'}</td>
     </tr>`;
   }).join('');
-  return rows || `<tr><td colspan="9" class="empty-state">${CACHE.purchases.length ? 'কিছু পাওয়া যায়নি' : 'কোনো ক্রয় এন্ট্রি নেই'}</td></tr>`;
+  return rows || `<tr><td colspan="10" class="empty-state">${CACHE.purchases.length ? 'কিছু পাওয়া যায়নি' : 'কোনো ক্রয় এন্ট্রি নেই'}</td></tr>`;
 }
 function onPurchaseSearch(){
   PU_Q = document.getElementById('puSearch').value;
@@ -1497,7 +1670,12 @@ function renderPurchases(){
     ${flashHtml('purchases')}
     <div class="panel">
       <div class="panel-head"><h3>ক্রয় খাতা (সোর্সিং)</h3>
-        <button class="btn btn-accent btn-sm" onclick="openPurchaseForm()">+ নতুন ক্রয়</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-outline btn-sm" onclick="downloadPurchaseTemplate()">📥 ক্রয় আপলোডের ফরম্যাট</button>
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('puExcelInput').click()">📤 এক্সেল থেকে ক্রয় আপলোড</button>
+          <input type="file" id="puExcelInput" accept=".xlsx,.xls" class="hidden" onchange="handlePurchaseExcel(event)">
+          <button class="btn btn-accent btn-sm" onclick="openPurchaseForm()">+ নতুন ক্রয়</button>
+        </div>
       </div>
       <div class="toolbar">
         <select id="puMonth" onchange="onPurchaseSearch()">${monthOptionsHtml(PU_MONTH, true)}</select>
@@ -1509,7 +1687,7 @@ function renderPurchases(){
         </select>
       </div>
       <div class="table-wrap"><table><thead><tr>
-        <th>আইডি</th><th>তারিখ</th><th>সরবরাহকারী</th><th>পণ্য</th><th>পরিমাণ</th><th>মোট খরচ</th><th>গড় খরচ/একক</th><th>পেমেন্ট</th><th>একশন</th>
+        <th>আইডি</th><th>তারিখ</th><th>ভাউচার নং</th><th>সরবরাহকারী</th><th>পণ্য</th><th>পরিমাণ</th><th>মোট খরচ</th><th>গড় খরচ/একক</th><th>পেমেন্ট</th><th>একশন</th>
       </tr></thead><tbody id="puBody">${purchaseRowsHtml()}</tbody></table></div>
       <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">ফ্রি আইটেম এলে মোট পরিমাণের মধ্যেই সেটা ধরে "গড় খরচ/একক" স্বয়ংক্রিয়ভাবে হিসাব হয় — আলাদা কিছু করতে হয় না।${admin ? ' ভুল এন্ট্রি ✏️ বাটনে সংশোধন করুন — স্টক নিজে থেকেই সমন্বয় হবে।' : ' ভুল এন্ট্রি সংশোধন বা মোছা শুধু অ্যাডমিন করতে পারবেন — অ্যাডমিনকে জানান।'}</p>
     </div>
@@ -1517,6 +1695,166 @@ function renderPurchases(){
   `;
   scrollToHl();
 }
+/* ============================================================
+   PURCHASE EXCEL IMPORT — ক্রয় ভাউচার এক্সেল থেকে একসাথে আপলোড
+   ============================================================ */
+let PU_IMPORT = null;
+const BN_DIG = '০১২৩৪৫৬৭৮৯';
+function bnToEn(v){ return String(v).replace(/[০-৯]/g, d => BN_DIG.indexOf(d)); }
+function toNum(v){
+  if(v===null || v===undefined || String(v).trim()==='') return null;
+  if(typeof v==='number') return v;
+  const n = Number(bnToEn(v).replace(/[,\s৳]/g,''));
+  return isNaN(n) ? NaN : n;
+}
+function validYMD(y,m,d){ const dt = new Date(Date.UTC(y,m-1,d)); return dt.getUTCFullYear()===y && dt.getUTCMonth()===m-1 && dt.getUTCDate()===d; }
+function parseXlDate(v){
+  if(v===null || v===undefined || String(v).trim()==='') return '';
+  let y,m,d;
+  if(typeof v==='number'){ const dt = new Date(Date.UTC(1899,11,30) + Math.round(v)*864e5); y = dt.getUTCFullYear(); m = dt.getUTCMonth()+1; d = dt.getUTCDate(); }
+  else {
+    const s = bnToEn(v).trim(); let t;
+    if((t = s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})$/))){ y=+t[1]; m=+t[2]; d=+t[3]; }
+    else if((t = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})$/))){ d=+t[1]; m=+t[2]; y=+t[3]; }
+    else return '';
+  }
+  if(!validYMD(y,m,d)) return '';
+  return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
+function normHeader(h){ return String(h||'').split('(')[0].replace(/\s+/g,' ').trim(); }
+function normName(n){ return String(n||'').replace(/\s+/g,' ').trim().toLowerCase(); }
+function planPurchaseImport(rawRows){
+  const rows = []; const newNames = {};
+  const prodByName = {}, prodById = {};
+  CACHE.products.forEach(p => { prodByName[normName(p.name)] = p; prodById[String(p.id).toLowerCase()] = p; });
+  const existingKeys = new Set(CACHE.purchases.map(pu => [pu.date, String(pu.voucherNo||'').trim().toLowerCase(), pu.productId, r3(pu.qty), r2(pu.totalCost)].join('|')));
+  rawRows.forEach((raw, i) => {
+    const r = {}; Object.keys(raw).forEach(k => { r[normHeader(k)] = raw[k]; });
+    const blank = Object.keys(r).every(k => String(r[k]??'').trim()==='');
+    if(blank) return;
+    const o = {n: i+2, err:'', dup:false};
+    o.date = parseXlDate(r['তারিখ']);
+    o.voucher = String(r['ভাউচার নং']??'').trim();
+    o.supplier = String(r['সরবরাহকারী']??'').trim();
+    o.name = String(r['পণ্যের নাম']??'').trim();
+    const pid = String(r['আইডি']??'').trim().toLowerCase();
+    o.qty = toNum(r['পরিমাণ']); o.free = toNum(r['এর মধ্যে ফ্রি পরিমাণ']) || 0; o.cost = toNum(r['মোট খরচ']);
+    const pay = String(r['পেমেন্ট']??'').trim();
+    o.status = /বকেয়া|due|outstanding/i.test(pay) ? 'Outstanding' : 'Paid';
+    const paid = toNum(r['পরিশোধিত টাকা']); o.paidIn = paid;
+    o.cat = String(r['ক্যাটাগরি']??'').trim(); o.unit = String(r['একক']??'').trim(); o.retail = toNum(r['বিক্রয়মূল্য']);
+    const errs = [];
+    if(!o.date) errs.push('তারিখ ভুল/ফাঁকা (YYYY-MM-DD লিখুন)');
+    else if(isDateLocked(o.date)) errs.push(monthLabel(mOf(o.date)) + ' মাস লক করা');
+    if(!o.supplier) errs.push('সরবরাহকারী ফাঁকা');
+    let prod = (pid && prodById[pid]) || prodByName[normName(o.name)] || null;
+    if(!prod && !o.name) errs.push('পণ্যের নাম ফাঁকা');
+    if(o.qty===null || isNaN(o.qty) || !(o.qty>0)) errs.push('পরিমাণ ভুল');
+    if(isNaN(o.free) || o.free<0 || o.free>(o.qty||0)) errs.push('ফ্রি পরিমাণ ভুল');
+    if(o.cost===null || isNaN(o.cost) || o.cost<0) errs.push('মোট খরচ ভুল');
+    if(o.retail!==null && isNaN(o.retail)) errs.push('বিক্রয়মূল্য ভুল');
+    o.err = errs.join(', ');
+    if(prod){ o.pid = prod.id; o.name = prod.name; } else if(!o.err){ o.isNew = true; newNames[normName(o.name)] = o.name; }
+    if(!o.err && o.pid){
+      const key = [o.date, o.voucher.toLowerCase(), o.pid, r3(o.qty), r2(o.cost)].join('|');
+      if(existingKeys.has(key)) o.dup = true;
+    }
+    rows.push(o);
+  });
+  return {rows, newNames: Object.values(newNames)};
+}
+function downloadPurchaseTemplate(){
+  if(typeof XLSX==='undefined'){ alert('এক্সেল লাইব্রেরি লোড হয়নি — ইন্টারনেট চেক করে পেইজ রিফ্রেশ করুন'); return; }
+  const head = ['তারিখ (YYYY-MM-DD)','ভাউচার নং','সরবরাহকারী','পণ্যের নাম','পরিমাণ','এর মধ্যে ফ্রি পরিমাণ','মোট খরচ (৳)','পেমেন্ট (পরিশোধিত/বকেয়া)','পরিশোধিত টাকা (বকেয়া হলে)','ক্যাটাগরি (শুধু নতুন পণ্যের জন্য)','একক (শুধু নতুন পণ্যের জন্য)','বিক্রয়মূল্য (শুধু নতুন পণ্যের জন্য)'];
+  const ex = CACHE.products.slice(0,2);
+  const rows = [head,
+    [todayStr(),'V-1001','নমুনা সরবরাহকারী', ex[0]?ex[0].name:'চিনিগুড়া (পোলাও)', 50, 0, 10500, 'পরিশোধিত', '', '', '', ''],
+    [todayStr(),'V-1001','নমুনা সরবরাহকারী', ex[1]?ex[1].name:'মসুর ডাল (দেশি)', 25, 1, 3200, 'বকেয়া', 1000, '', '', '']];
+  const ws = XLSX.utils.aoa_to_sheet(rows); ws['!cols'] = head.map(() => ({wch:24}));
+  const help = [['নির্দেশনা'],
+    ['১. প্রতিটি সারি = একটি ভাউচারের একটি পণ্য। একই ভাউচারে ৫টি পণ্য থাকলে ৫টি সারি, ভাউচার নং সবগুলোয় একই।'],
+    ['২. "পণ্যের নাম" পণ্য তালিকার নামের সাথে হুবহু মিলতে হবে (পাশের "পণ্যের তালিকা" শিটের নাম কপি করুন)। না মিললে নতুন পণ্য হিসেবে যোগ হবে।'],
+    ['৩. "পরিমাণ" পণ্যের একক অনুযায়ী (যেমন কেজি পণ্যে কেজি, ৫০০ গ্রামের প্যাকেট পণ্যে প্যাকেট সংখ্যা)। ফ্রি আইটেমসহ মোট পরিমাণ লিখুন।'],
+    ['৪. "মোট খরচ" = ওই সারির পণ্যের জন্য আসলে যত টাকা দিয়েছেন।'],
+    ['৫. "পেমেন্ট": পরিশোধিত অথবা বকেয়া। ফাঁকা থাকলে পরিশোধিত ধরা হবে।'],
+    ['৬. শেষ তিনটি ঘর (ক্যাটাগরি, একক, বিক্রয়মূল্য) শুধু নতুন পণ্যের জন্য — আগের পণ্যের জন্য ফাঁকা রাখুন।'],
+    ['৭. একই ফাইল ভুলে দ্বিতীয়বার আপলোড করলে আগের এন্ট্রিগুলো "ডুপ্লিকেট" ধরে বাদ যাবে — স্টক দ্বিগুণ হবে না।']];
+  const wh = XLSX.utils.aoa_to_sheet(help); wh['!cols'] = [{wch:120}];
+  const wp = XLSX.utils.aoa_to_sheet([['আইডি','পণ্যের নাম','একক']].concat(CACHE.products.map(p => [p.id, p.name, p.unit||'কেজি']))); wp['!cols'] = [{wch:10},{wch:40},{wch:14}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'ক্রয় ভাউচার'); XLSX.utils.book_append_sheet(wb, wh, 'নির্দেশনা'); XLSX.utils.book_append_sheet(wb, wp, 'পণ্যের তালিকা');
+  XLSX.writeFile(wb, 'ক্রয়-আপলোড-ফরম্যাট.xlsx');
+}
+function handlePurchaseExcel(event){
+  const file = event.target.files[0]; event.target.value = '';
+  if(!file) return;
+  if(typeof XLSX==='undefined'){ alert('এক্সেল লাইব্রেরি লোড হয়নি — ইন্টারনেট চেক করে পেইজ রিফ্রেশ করুন'); return; }
+  const reader = new FileReader();
+  reader.onload = e => {
+    try{
+      const wb = XLSX.read(e.target.result, {type:'array'});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json(ws, {defval:''});
+      if(!raw.length){ alert('ফাইলে কোনো সারি পাওয়া যায়নি'); return; }
+      showPurchaseImportPreview(planPurchaseImport(raw));
+    }catch(err){ alert('ফাইলটি পড়া যায়নি: ' + err.message); }
+  };
+  reader.readAsArrayBuffer(file);
+}
+function showPurchaseImportPreview(plan){
+  PU_IMPORT = plan;
+  const ok = plan.rows.filter(r => !r.err && !r.dup), bad = plan.rows.filter(r => r.err), dup = plan.rows.filter(r => r.dup);
+  const total = r2(ok.reduce((t,r) => t + r.cost, 0));
+  openForm(`
+    <div class="panel">
+      <h3>📤 ক্রয় আপলোড — যাচাই</h3>
+      <div class="flash ${bad.length?'warn':''}" style="margin-bottom:12px;">
+        মোট সারি: <b>${plan.rows.length}</b> · আপলোড হবে: <b>${ok.length}</b> (মোট ${money(total)}) · ত্রুটি: <b>${bad.length}</b> · ডুপ্লিকেট (আগেই আছে, বাদ): <b>${dup.length}</b>
+      </div>
+      ${plan.newNames.length ? `<div class="flash warn" style="margin-bottom:12px;">🆕 <b>${plan.newNames.length}টি নতুন পণ্য</b> তৈরি হবে — বানান ঠিক আছে তো? (ভুল বানানে নতুন পণ্য হয়ে যায়)<br>${plan.newNames.slice(0,30).map(esc).join('، ')}${plan.newNames.length>30?' ...':''}</div>` : ''}
+      ${bad.length ? `<div class="table-wrap"><table><thead><tr><th>সারি</th><th>পণ্য</th><th>সমস্যা</th></tr></thead><tbody>${bad.slice(0,50).map(r => `<tr><td>${r.n}</td><td>${esc(r.name)}</td><td style="color:#B3261E;">${esc(r.err)}</td></tr>`).join('')}</tbody></table></div>${bad.length>50?`<p class="muted-cell">আরও ${bad.length-50}টি ত্রুটি আছে</p>`:''}<p style="font-size:12.5px;color:var(--text-muted);">ত্রুটির সারিগুলো আপলোড হবে না। ফাইল ঠিক করে আবার আপলোড করতে পারেন — যেগুলো এখন আপলোড হবে সেগুলো তখন ডুপ্লিকেট ধরে বাদ যাবে।</p>` : ''}
+      <p style="font-size:12.5px;color:var(--text-muted);margin:12px 0;">আপলোডের পর প্রতিটি পণ্যের ক্রয়মূল্য নিজে থেকে সব ক্রয় ভাউচারের গড় অনুযায়ী ঠিক হয়ে যাবে।</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn btn-primary" ${ok.length?'':'disabled'} onclick="confirmPurchaseImport()">✅ ${ok.length}টি ক্রয় এন্ট্রি আপলোড করুন (স্টকে যোগ হবে)</button>
+        <button class="btn btn-outline" onclick="PU_IMPORT=null;closeForm(renderPurchases)">বাতিল</button>
+      </div>
+    </div>`);
+}
+function confirmPurchaseImport(){
+  const plan = PU_IMPORT; if(!plan) return;
+  const ok = plan.rows.filter(r => !r.err && !r.dup);
+  if(!ok.length){ alert('আপলোডের মতো কোনো সঠিক সারি নেই'); return; }
+  if(!guardDates(ok.map(r => r.date), 'আপলোড')) return;
+  const products = CACHE.products.map(p => ({...p}));
+  const purchases = CACHE.purchases.slice();
+  const agg = {}, createdIds = [], newPurchaseIds = [];
+  const byName = {}; products.forEach((p,i) => { byName[normName(p.name)] = i; });
+  const cats = CACHE.settings.productCategories.slice(); let catsChanged = false;
+  ok.forEach(r => {
+    let pi = r.pid ? products.findIndex(p => p.id===r.pid) : (byName[normName(r.name)] ?? -1);
+    let isNew = false;
+    if(pi < 0){
+      const np = {id: genId('P', products), name: r.name, category: r.cat || 'অন্যান্য', unit: r.unit || 'কেজি', cost: 0, retail: (r.retail>0 ? r.retail : 0), stock: 0, minStock: 5, hidden: false, createdAt: todayStr()};
+      products.push(np); pi = products.length-1; byName[normName(r.name)] = pi; createdIds.push(np.id); isNew = true;
+      if(np.category && !cats.includes(np.category)){ cats.push(np.category); catsChanged = true; }
+    }
+    const p = products[pi];
+    products[pi] = {...p, hidden:false, stock: r3(Number(p.stock||0) + r.qty)};
+    const a = agg[p.id] || (agg[p.id] = {q:0, c:0, isNew: createdIds.includes(p.id)}); a.q += r.qty; a.c += r.cost;
+    const paid = r.status==='Paid' ? Math.max(r.paidIn||0, r.cost) : Math.min(r.paidIn||0, r.cost);
+    const id = genId('PO-', purchases); newPurchaseIds.push(id);
+    purchases.push({id, date: r.date, supplier: r.supplier, voucherNo: r.voucher, productId: p.id, productName: p.name, qty: r.qty, freeQty: r.free||0, totalCost: r.cost, paymentStatus: r.status, paidAmount: paid});
+  });
+  applyAvgCosts(products, purchases, Object.keys(agg));   // সব ক্রয়ের গড় অনুযায়ী ক্রয়মূল্য
+  const okP = saveCollection('products', products);
+  const okQ = okP && saveCollection('purchases', purchases);
+  if(!okQ){ return; }
+  if(catsChanged) saveSettings({...CACHE.settings, productCategories: cats});
+  PU_IMPORT = null; PU_Q = ''; PU_PAY = 'all'; PU_MONTH = 'all';
+  setFlash('purchases', `✅ এক্সেল থেকে ${ok.length}টি ক্রয় এন্ট্রি আপলোড হয়েছে${createdIds.length?` এবং ${createdIds.length}টি নতুন পণ্য তৈরি হয়েছে`:''} — স্টক যোগ হয়েছে ও ক্রয়মূল্য ভাউচার গড় অনুযায়ী ঠিক হয়েছে (হলুদ দাগের সারিগুলো)।${createdIds.length?'<br>⚠️ নতুন পণ্যের বিক্রয়মূল্য ০ থাকলে পণ্য তালিকা থেকে দাম বসিয়ে দিন।':''}`, newPurchaseIds);
+  renderPurchases(); toTop();
+}
+
 function openPurchaseForm(id){
   if(id && !isAdmin()){ alert('ক্রয় এন্ট্রি সংশোধন শুধু অ্যাডমিন করতে পারবেন।'); return; }
   const pu = id ? CACHE.purchases.find(x=>x.id===id) : null;
@@ -1532,6 +1870,7 @@ function openPurchaseForm(id){
       <div class="form-grid">
         ${dateField('pu_date', pu?pu.date:'')}
         <div class="form-field"><label>সরবরাহকারী/মিল/চাতাল নাম</label><input id="pu_supplier" value="${pu?esc(pu.supplier):''}"></div>
+        <div class="form-field"><label>ভাউচার নম্বর (ঐচ্ছিক)</label><input id="pu_voucher" placeholder="যেমন: V-1024" value="${pu?esc(pu.voucherNo||''):''}"></div>
         <div class="form-field"><label>পণ্য — তালিকা থেকে বাছাই করুন</label>
           <select id="pu_product" onchange="onPurchaseProductPick()">
             <option value="">— তালিকা থেকে বাছাই করুন —</option>
@@ -1668,7 +2007,7 @@ function savePurchase(){
   const pi = products.findIndex(p=>p.id===prod.id);
   products[pi] = {...products[pi], hidden:false, stock: r3(Number(products[pi].stock) + qty)};
   const data = {
-    date: pickedDate('pu_date'), supplier, productId: prod.id, productName: products[pi].name, qty, freeQty,
+    date: pickedDate('pu_date'), supplier, voucherNo: (document.getElementById('pu_voucher')||{value:''}).value.trim(), productId: prod.id, productName: products[pi].name, qty, freeQty,
     totalCost, paymentStatus: status, paidAmount: paid
   };
   let savedId = id;
@@ -1679,6 +2018,7 @@ function savePurchase(){
     data.id = genId('PO-', purchases); savedId = data.id;
     purchases.push(data);
   }
+  applyAvgCosts(products, purchases, [prod.id, old && old.productId]);   // ক্রয়মূল্য = ভাউচার গড়
   saveCollection('products', products);
   saveCollection('purchases', purchases);
   PU_Q = ''; PU_PAY = 'all'; if(PU_MONTH!=='all') PU_MONTH = mOf(data.date) || PU_MONTH;
@@ -1699,8 +2039,10 @@ function deletePurchase(id){
   if(!confirm(`এই ক্রয় এন্ট্রিটি (${id}) মুছে ফেলতে চান?\n\nএই এন্ট্রির ${pu.qty} পরিমাণ স্টক থেকে বাদ যাবে।`)) return;
   const products = CACHE.products.map(p=>({...p}));
   adjustStock(products, [{productId: pu.productId, qty: pu.qty}], -1);
+  const restPurchases = CACHE.purchases.filter(p=>p.id!==id);
+  applyAvgCosts(products, restPurchases, [pu.productId]);
   saveCollection('products', products);
-  saveCollection('purchases', CACHE.purchases.filter(p=>p.id!==id));
+  saveCollection('purchases', restPurchases);
   renderPurchases();
 }
 
@@ -2268,61 +2610,34 @@ function saveContribution(shareholderId){
 function renderProfitLoss(){
   if(!monthsList().includes(VIEW_MONTH)) VIEW_MONTH = curMonth();
   const m = VIEW_MONTH, idx = moveIndex(), d = monthData(m, idx);
-  const carry = carryForward(m, idx), carryEnd = r2(carry + d.retained);
-  const totalInvested = d.cap.reduce((t,c) => t + Number(c[2]||0), 0);
-  const retainedPercent = 100 - d.pct;
-
+  const carry = carryForward(m, idx), carryEnd = r2(carry + d.net);
   document.getElementById('pageContent').innerHTML = `
     <div class="toolbar"><label style="font-size:13px;font-weight:700;">মাস:</label>
       <select onchange="onViewMonth(this)">${monthOptionsHtml(m, false)}</select></div>
     ${monthStatusHtml(m)}
-    <div class="grid grid-2">
-      <div class="panel">
-        <h3>আয়-ব্যয় বিবরণী — ${monthLabel(m)}</h3>
-        <table>
-          <tr><td>মোট বিক্রয় (ডেলিভারড অর্ডার)</td><td class="cell-num">${money(d.revenue)}</td></tr>
-          <tr><td>বিক্রিত পণ্যের ক্রয়মূল্য (COGS)</td><td class="cell-num">${money(d.cogs)}</td></tr>
-          <tr><td><b>গ্রস প্রফিট</b></td><td class="cell-num"><b>${money(d.gross)}</b></td></tr>
-          <tr><td>কমিশন / অন্যান্য আয়</td><td class="cell-num">+ ${money(d.otherIncome)}</td></tr>
-          <tr><td>মোট পরিচালন খরচ</td><td class="cell-num">${money(d.expenses)}</td></tr>
-        </table>
-        <div class="invoice-total-row"><span>নিট লাভ</span><span>${money(d.net)}</span></div>
-      </div>
-      <div class="panel">
-        <h3>নিট লাভের বণ্টন</h3>
-        <table>
-          <tr><td>লভ্যাংশ বণ্টনের হার</td><td class="cell-num">${d.pct}%</td></tr>
-          <tr><td>নিট লাভ</td><td class="cell-num">${money(d.net)}</td></tr>
-        </table>
-        <div class="invoice-total-row"><span>শেয়ারহোল্ডার পুল (${d.pct}%)</span><span>${money(d.pool)}</span></div>
-        <div class="invoice-total-row" style="margin-top:8px;"><span>প্রতিষ্ঠানের নিজস্ব অংশ (${retainedPercent}%)</span><span>${money(d.net>0 ? d.retained : 0)}</span></div>
-        <p style="font-size:12px;color:var(--text-muted);margin-top:10px;">লভ্যাংশের হার পরিবর্তন করতে সেটিংস পেইজে যান।${d.locked?' (লক করা মাসে লক করার সময়ের হার ধরা আছে।)':''}</p>
-      </div>
+    <div class="panel">
+      <h3>আয়-ব্যয় বিবরণী — ${monthLabel(m)}</h3>
+      <table>
+        <tr><td>মোট বিক্রয় (ডেলিভারড অর্ডার)</td><td class="cell-num">${money(d.revenue)}</td></tr>
+        <tr><td>বিক্রিত পণ্যের ক্রয়মূল্য (COGS)</td><td class="cell-num">${money(d.cogs)}</td></tr>
+        <tr><td><b>গ্রস প্রফিট</b></td><td class="cell-num"><b>${money(d.gross)}</b></td></tr>
+        <tr><td>কমিশন / অন্যান্য আয়</td><td class="cell-num">+ ${money(d.otherIncome)}</td></tr>
+        <tr><td>মোট পরিচালন খরচ</td><td class="cell-num">− ${money(d.expenses)}</td></tr>
+      </table>
+      <div class="invoice-total-row"><span>নিট প্রফিট</span><span>${money(d.net)}</span></div>
     </div>
     <div class="panel">
       <h3>জের ও মাস শেষের অবস্থা</h3>
       <table>
         <tr><td>মাসের শুরুর স্টকের মূল্য (আগের মাস থেকে জের)</td><td class="cell-num">${money(d.openVal)}</td></tr>
         <tr><td>মাস শেষের স্টকের মূল্য</td><td class="cell-num">${money(d.closeVal)}</td></tr>
-        <tr><td>আগের মাসগুলোর জমা জের (প্রতিষ্ঠানের অংশ, ক্ষতি হলে বাদ)</td><td class="cell-num">${money(carry)}</td></tr>
-        <tr><td>+ এই মাসের প্রতিষ্ঠানের অংশ${d.net<0?' (ক্ষতি)':''}</td><td class="cell-num">${money(d.retained)}</td></tr>
+        <tr><td>আগের মাসগুলোর জমা নিট প্রফিট (জের)</td><td class="cell-num">${money(carry)}</td></tr>
+        <tr><td>+ এই মাসের নিট প্রফিট</td><td class="cell-num">${money(d.net)}</td></tr>
         <tr><td>এই মাসে নতুন কাস্টমার বকেয়া</td><td class="cell-num">${money(d.custDueNew)}</td></tr>
         <tr><td>এই মাসে নতুন সরবরাহকারী বকেয়া</td><td class="cell-num">${money(d.supDueNew)}</td></tr>
       </table>
-      <div class="invoice-total-row"><span>মাস শেষে মোট জমা জের (পরের মাসে যাবে)</span><span>${money(carryEnd)}</span></div>
-      <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">এই জের পরের মাসে নিজে থেকেই যোগ হয়। আগের মাসে পরে কোনো এন্ট্রি (পুরোনো তারিখে) দিলে পরের মাসের জের নিজে থেকেই ঠিক হয়ে যায়।</p>
-    </div>
-    <div class="panel">
-      <h3>শেয়ারহোল্ডার অনুযায়ী লভ্যাংশ বণ্টন — ${monthLabel(m)} (মাস শেষের জমার অনুপাতে)</h3>
-      <div class="table-wrap"><table><thead><tr>
-        <th>শেয়ারহোল্ডার</th><th>মোট জমা (মাস শেষে)</th><th>শেয়ারের হার</th><th>এই মাসের প্রাপ্য লভ্যাংশ</th>
-      </tr></thead><tbody>
-        ${d.cap.length ? d.cap.map(c=>{
-          const pct = totalInvested>0 ? Number(c[2])/totalInvested : 0;
-          return `<tr><td>${esc(c[1])}</td><td class="cell-num">${money(c[2])}</td><td class="cell-num">${(pct*100).toFixed(1)}%</td><td class="cell-num">${money(d.pool*pct)}</td></tr>`;
-        }).join('') : `<tr><td colspan="4" class="empty-state">এখনো কোনো শেয়ারহোল্ডার যোগ করা হয়নি — "শেয়ারহোল্ডার" পেইজ থেকে যোগ করুন</td></tr>`}
-      </tbody></table></div>
-      <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">প্রতিটা শেয়ারহোল্ডারের অংশ = শেয়ারহোল্ডার পুল × (তার জমা ÷ সবার মোট জমা)।</p>
+      <div class="invoice-total-row"><span>মাস শেষে মোট জমা নিট প্রফিট (পরের মাসে যাবে)</span><span>${money(carryEnd)}</span></div>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">জের পরের মাসে নিজে থেকেই যোগ হয়। আগের মাসে পুরোনো তারিখে কোনো এন্ট্রি দিলে পরের মাসের জের নিজে থেকেই ঠিক হয়ে যায়।</p>
     </div>
   `;
 }
@@ -2489,12 +2804,16 @@ function renderSettings(){
         <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="saveBusinessAddress()">সংরক্ষণ করুন</button>
       </div>
       <div class="panel">
-        <h3>লভ্যাংশ বণ্টনের হার</h3>
-        <div class="form-field" style="max-width:220px;">
-          <label>শেয়ারহোল্ডার লভ্যাংশ (%)</label>
-          <input id="s_dividend" type="number" value="${settings.dividendPercent}">
+        <h3>সার্ভার ব্যাকআপ (স্বয়ংক্রিয়)</h3>
+        <p style="font-size:12.5px;color:var(--text-muted);">প্রতিদিন একবার সব ডেটার কপি সার্ভারের আলাদা জায়গায় জমা হয়। ৬০ দিনের দৈনিক কপি এবং প্রতি মাসের একটি কপি চিরকাল থাকে।</p>
+        <p id="bkStatus" style="font-size:13px;">${bkStatusText()}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="runServerBackup(true)">☁️ এখনই ব্যাকআপ নিন</button>
+          <button class="btn btn-outline btn-sm" onclick="loadServerBackups()">📂 ব্যাকআপ তালিকা / ফেরত আনুন</button>
         </div>
-        <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="saveDividend()">সংরক্ষণ করুন</button>
+        <div id="bkList" style="margin-top:10px;"></div>
+        <h3 style="margin-top:18px;">ডেটা ব্যবহার (প্রতিটি তথ্যের সীমা ১ MB)</h3>
+        ${dataUsageHtml()}
       </div>
       <div class="panel">
         <h3>পিন পরিবর্তন করুন</h3>
@@ -2523,7 +2842,7 @@ function renderSettings(){
       </div>
       <div class="panel">
         <h3>ডেটা ব্যাকআপ</h3>
-        <p style="font-size:13px;color:var(--text-muted);">সব পণ্য, অর্ডার, ক্রয়, খরচ, বকেয়া, রিটার্ন ও শেয়ারহোল্ডার তথ্যের একটা কপি আপনার ফোন/কম্পিউটারে ডাউনলোড করে রাখুন — সপ্তাহে অন্তত একবার করার অভ্যাস রাখা ভালো।</p>
+        <p style="font-size:13px;color:var(--text-muted);">সব পণ্য, অর্ডার, ক্রয়, খরচ, বকেয়া ও রিটার্ন তথ্যের একটা কপি আপনার ফোন/কম্পিউটারে ডাউনলোড করে রাখুন — সপ্তাহে অন্তত একবার করার অভ্যাস রাখা ভালো।</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-primary btn-sm" onclick="downloadBackup()">📥 ব্যাকআপ ডাউনলোড করুন</button>
           <button class="btn btn-outline btn-sm" onclick="document.getElementById('restoreFileInput').click()">📤 ব্যাকআপ থেকে ডেটা ফিরিয়ে আনুন</button>
@@ -2541,6 +2860,7 @@ function downloadBackup(){
     expenses: CACHE.expenses, returns: CACHE.returns, shareholders: CACHE.shareholders,
     contributions: CACHE.contributions, closings: CACHE.closings, settings: CACHE.settings
   };
+  try{ localStorage.setItem('AM_lastDownload', String(Date.now())); }catch(e){}
   const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -2656,7 +2976,8 @@ function printStockReport(onlyInStock){
 /* ============================================================
    RESTORE FROM BACKUP (.json made by downloadBackup)
    ============================================================ */
-function restoreBackup(event){
+function restoreBackup(event){ FORCE_SAVE = true; setTimeout(()=>{ FORCE_SAVE = false; }, 90000); return restoreBackup_(event); }
+function restoreBackup_(event){
   const file = event.target.files[0];
   if(!file) return;
   const reader = new FileReader();
@@ -2712,7 +3033,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '২.৭';
+const APP_VERSION = '৩.১';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{

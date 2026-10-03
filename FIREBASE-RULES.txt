@@ -1,0 +1,35 @@
+Firestore Rules — ডেটা সুরক্ষার জন্য (ঐচ্ছিক কিন্তু অত্যন্ত সুপারিশকৃত)
+=====================================================================
+কখন করবেন: নতুন সংস্করণ (৩.০) ডিপ্লয় করে একবার লগইন করে দেখে নেওয়ার পরে।
+কোথায়: Firebase Console → Firestore Database → Rules ট্যাব → নিচের লেখা বসিয়ে "Publish".
+(Publish-এর আগে Firebase নিজেই সিনট্যাক্স যাচাই করে দেখায়।)
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // মূল ডেটা: কখনো মোছা যাবে না; একবারে ২০টির বেশি এন্ট্রি কমানো যাবে না
+    match /averamart/{doc} {
+      allow read, create: if request.auth != null;
+      allow delete: if false;
+      allow update: if request.auth != null && (
+        !('items' in resource.data) || !('items' in request.resource.data) ||
+        request.resource.data.items.size() >= resource.data.items.size() - 20
+      );
+    }
+
+    // সার্ভার ব্যাকআপ: একবার লেখা হলে বদলানো যাবে না; শুধু ৬০ দিনের পুরোনো দৈনিক কপি মোছা যাবে
+    match /averamart_backups/{doc} {
+      allow read, create: if request.auth != null;
+      allow update: if false;
+      allow delete: if request.auth != null
+        && resource.data.keep != true
+        && resource.data.ts < request.time - duration.value(60, 'd');
+    }
+  }
+}
+
+নোট:
+- এই নিয়মে অ্যাপ বা কোনো ত্রুটি ভুল করে ডেটা মুছে ফেলতে চাইলে সার্ভার নিজেই আটকে দেবে (যেমন ৬৮টি পণ্য থেকে ৩টি)।
+- ব্যাকআপ ফাইল থেকে "ডেটা ফিরিয়ে আনুন" করলে ডেটা বাড়ে, তাই কোনো সমস্যা নেই। কিন্তু বর্তমানের চেয়ে ২০টির বেশি কম এন্ট্রির পুরোনো ব্যাকআপ ফেরত আনতে চাইলে সার্ভার আটকাবে — তখন Rules সাময়িক শিথিল করে ফেরত আনুন, তারপর আবার এই নিয়ম বসান।
+- আরও নিরাপত্তা: Firebase Console → Firestore → "Disaster recovery" থেকে Point-in-time recovery (PITR) এবং Scheduled backups চালু করুন (Blaze প্ল্যান লাগে)।
