@@ -318,7 +318,14 @@ function fmtQty(qty, p){
   if(info && info.pack && q > 1 && Math.abs(q - Math.round(q)) > 0.0001) return `${r3(q)} ${unit} (${r3(q*info.factor)} ${info.label})`;
   return `${r3(q)} ${unit}`;
 }
-function lineAmt(it){ return Math.round(Number(it.qty)*Number(it.unitPrice)*100)/100; }
+function lineGross(it){ return Math.round(Number(it.qty)*Number(it.unitPrice)*100)/100; }
+function lineDisc(it){
+  const g = lineGross(it);
+  if(it.discType==='pct') return Math.min(g, Math.round(g*(Number(it.discVal)||0))/100);
+  if(it.discType==='amt') return Math.min(g, Math.round((Number(it.discVal)||0)*100)/100);
+  return Math.min(g, Math.round((Number(it.lineDiscount)||0)*100)/100);
+}
+function lineAmt(it){ return Math.round((lineGross(it) - lineDisc(it))*100)/100; }
 // what the customer sees: exactly the unit the seller picked (e.g. "10 গ্রাম", "2 কেজি")
 function fmtItem(it, p){ return (it.dq!=null && it.du) ? `${it.dq} ${it.du}` : fmtQty(it.qty, p); }
 function syncDisp(it, p){
@@ -1870,7 +1877,7 @@ function addToCart(productId){
   if(!p) return;
   const existing = ORDER_CART.find(it=>it.productId===productId);
   if(existing){ existing.qty = Number(existing.qty) + 1; }
-  else { ORDER_CART.push({productId, qty:1, unitPrice: p.retail, standardPrice: p.retail}); }
+  else { ORDER_CART.push({productId, qty:1, unitPrice: p.retail, standardPrice: p.retail, discType:'amt', discVal:0}); }
   document.getElementById('o_search').value = '';
   document.getElementById('searchResults').innerHTML = '';
   document.getElementById('searchResults').classList.remove('open');
@@ -1912,6 +1919,12 @@ function onPayMethodChange(){
   const method = document.getElementById('o_paymethod').value;
   document.getElementById('o_txnref_wrap').classList.toggle('hidden', method==='Cash');
 }
+function updateCartDisc(productId, key, val){
+  const it = ORDER_CART.find(x=>x.productId===productId); if(!it) return;
+  if(key==='type'){ it.discType = val==='pct' ? 'pct' : 'amt'; }
+  else { it.discType = it.discType || 'amt'; it.discVal = Math.max(0, Number(val)||0); }
+  renderCart();
+}
 function updateCartPrice(productId, price){
   const it = ORDER_CART.find(x=>x.productId===productId);
   if(it) it.unitPrice = Math.max(0, Number(price)||0);
@@ -1936,14 +1949,16 @@ function renderCart(){
         <td>${esc(p?p.name:'—')}</td>
         <td class="cell-center"><input type="number" min="0.001" step="any" value="${r3(it.qty*optByKey(p,it.mode).factor)}" style="width:75px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartQty('${it.productId}', this.value)">
           ${unitSelectHtml(p, it.mode||'base', `onchange="setCartUnitMode('${it.productId}', this.value)"`)}</td>
-        <td class="cell-center"><input type="number" min="0" value="${it.unitPrice}" style="width:80px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartPrice('${it.productId}', this.value)"></td>
-        <td class="cell-num">${money(lineTotal)}<br><span class="muted-cell">${r3(it.qty*optByKey(p,it.mode).factor)} ${esc(optByKey(p,it.mode).label)} = ${r3(it.qty)}টি ${esc(p?.unit||'কেজি')} × ${money(it.unitPrice)}</span></td>
+        <td class="cell-center"><input type="number" min="0" value="${it.unitPrice}" style="width:80px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartPrice('${it.productId}', this.value)">${(it.standardPrice!=null && Number(it.unitPrice)<Number(it.standardPrice)) ? '<br><span style="font-size:11px;color:#B3261E;">দাম কমানো — ইনভয়েসে ছাড় দেখাবে না। "ছাড়" ঘর ব্যবহার করুন।</span>' : ''}</td>
+        <td class="cell-center"><input type="number" min="0" step="any" value="${it.discVal||''}" placeholder="০" style="width:70px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartDisc('${it.productId}','val',this.value)">
+          <select onchange="updateCartDisc('${it.productId}','type',this.value)" style="padding:5px;border:1px solid var(--border);border-radius:6px;background:#fff;"><option value="amt" ${it.discType!=='pct'?'selected':''}>৳</option><option value="pct" ${it.discType==='pct'?'selected':''}>%</option></select></td>
+        <td class="cell-num">${money(lineTotal)}${lineDisc(it)>0 ? `<br><span style="font-size:11.5px;color:#0E7448;">মূল ${money(lineGross(it))} − ছাড় ${money(lineDisc(it))}</span>` : ''}<br><span class="muted-cell">${r3(it.qty*optByKey(p,it.mode).factor)} ${esc(optByKey(p,it.mode).label)} = ${r3(it.qty)}টি ${esc(p?.unit||'কেজি')} × ${money(it.unitPrice)}</span></td>
         <td class="cell-center"><button class="icon-btn danger" onclick="removeFromCart('${it.productId}')">🗑️</button></td>
       </tr>`;
   }).join('');
   holder.innerHTML = `
     <div class="table-wrap"><table>
-      <thead><tr><th>পণ্য</th><th>পরিমাণ</th><th>একক মূল্য (এডিট করা যাবে)</th><th>লাইন টোটাল</th><th></th></tr></thead>
+      <thead><tr><th>পণ্য</th><th>পরিমাণ</th><th>একক মূল্য</th><th>এই পণ্যে ছাড়</th><th>লাইন টোটাল</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
     <table style="margin-top:8px;">
@@ -1952,7 +1967,7 @@ function renderCart(){
       ${discount>0 ? `<tr><td>ছাড় / ডিসকাউন্ট</td><td class="cell-num">− ${money(discount)}</td></tr>` : ''}
     </table>
     <div class="invoice-total-row" style="margin-top:6px;"><span>সর্বমোট</span><span>${money(Math.max(0,subtotal+deliveryCharge-discount))}</span></div>
-    <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">দাম বদলাতে চাইলে লাইনের "একক মূল্য" ঘরে নতুন দাম লিখুন। সামগ্রিক ছাড় উপরের "ছাড় / ডিসকাউন্ট" ঘরে দিন।</p>
+    <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">কোনো পণ্যে ছাড় দিতে লাইনের "এই পণ্যে ছাড়" ঘরে টাকা (৳) বা শতাংশ (%) লিখুন — ইনভয়েসে কোন পণ্যে কত ছাড় দিয়েছেন কাস্টমার তা দেখতে পাবেন। একক মূল্য কমাবেন না। পুরো বিলের উপর ছাড় উপরের "ছাড় / ডিসকাউন্ট" ঘরে দিন।</p>
   `;
 }
 
@@ -1970,6 +1985,7 @@ function saveOrder(id){
       const p = CACHE.products.find(x=>x.id===it.productId);
       const o = optByKey(p, it.mode);
       return {productId:it.productId, qty:Number(it.qty), unitPrice:Number(it.unitPrice), standardPrice:Number(it.standardPrice!=null?it.standardPrice:it.unitPrice),
+        lineDiscount: lineDisc(it), discType: it.discType==='pct'?'pct':'amt', discVal: Number(it.discVal)||0,
         dq: r3(Number(it.qty)*o.factor), du: o.label};
     }),
     discount,
@@ -2737,14 +2753,17 @@ function submitReturn(orderId){
     if(retQty > Number(it.qty) + 0.0005){ overLimit = true; return; }
     if(retQty>0){
       anyReturned = true;
-      const refundAmount = retQty * Number(it.unitPrice);
+      const netUnit = Number(it.qty)>0 ? lineAmt(it)/Number(it.qty) : Number(it.unitPrice);
+      const refundAmount = retQty * netUnit;
       newEntries.push({
         id: genId('RET-', returns.concat(newEntries)),
         date: pickedDate('ret_date'), orderId: order.id, customerName: order.customerName,
         productId: it.productId, qty: retQty, refundAmount: Math.round(refundAmount*100)/100, reason,
         dq: r3(typed), du: oRet.label, restocked: order.status==='Delivered'
       });
-      it.qty = r3(Number(it.qty) - retQty);
+      const oldQ = Number(it.qty), oldDisc = lineDisc(it);
+      it.qty = r3(oldQ - retQty);
+      it.lineDiscount = oldQ>0 ? Math.round(oldDisc*(it.qty/oldQ)*100)/100 : 0; it.discType = 'amt'; it.discVal = it.lineDiscount;
       syncDisp(it, products.find(x=>x.id===it.productId));
       if(order.status==='Delivered'){
         const pIdx = products.findIndex(p=>p.id===it.productId);
@@ -2779,43 +2798,48 @@ function submitReturn(orderId){
    DISCOUNT REGISTER — every order line sold below the product's
    standard price at the time of sale, so nothing gets buried.
    ============================================================ */
+let DISC_MONTH = 'all';
+function onDiscMonth(sel){ DISC_MONTH = sel.value; renderDiscounts(); }
 function renderDiscounts(){
-  const orders = CACHE.orders.filter(o=>o.status!=='Cancelled');
+  const orders = CACHE.orders.filter(o => o.status!=='Cancelled' && (DISC_MONTH==='all' || mOf(o.date)===DISC_MONTH));
   const products = CACHE.products;
-  const rows = [];
-  orders.forEach(o=>{
-    orderItems(o).forEach(it=>{
-      const std = Number(it.standardPrice!=null ? it.standardPrice : it.unitPrice);
-      const actual = Number(it.unitPrice);
-      if(std > actual){
-        const p = products.find(x=>x.id===it.productId);
-        rows.push({
-          date:o.date, orderId:o.id, customerName:o.customerName,
-          productName: p?p.name:'—', qty:it.qty, standardPrice:std, actual, lineDiscount:(std-actual)*Number(it.qty)
-        });
+  const rows = [], byProd = {};
+  let orderLevel = 0;
+  orders.forEach(o => {
+    orderLevel += Number(o.discount||0);
+    orderItems(o).forEach(it => {
+      const std = Number(it.standardPrice!=null ? it.standardPrice : it.unitPrice), actual = Number(it.unitPrice);
+      const priceDisc = std > actual ? (std-actual)*Number(it.qty) : 0, ld = lineDisc(it), total = priceDisc + ld;
+      if(total > 0){
+        const p = products.find(x => x.id===it.productId), name = p ? p.name : '—';
+        rows.push({date:o.date, orderId:o.id, customerName:o.customerName, productName:name, qty:fmtItem(it,p), std, actual, ld, priceDisc, total});
+        const a = byProd[it.productId] || (byProd[it.productId] = {name, count:0, total:0}); a.count++; a.total += total;
       }
     });
   });
-  rows.sort((a,b)=> (a.date<b.date?1:-1));
-  const totalDiscount = rows.reduce((s,r)=>s+r.lineDiscount,0);
-
+  rows.sort((a,b) => (a.date<b.date?1:-1));
+  const lineTotal = rows.reduce((t,r) => t + r.total, 0);
+  const prodRows = Object.values(byProd).sort((a,b) => b.total-a.total);
   document.getElementById('pageContent').innerHTML = `
-    <div class="stat-card warn" style="max-width:320px;margin-bottom:16px;">
-      <div class="label">এ পর্যন্ত মোট দেওয়া ছাড় (পণ্যভিত্তিক)</div>
-      <div class="value">${money(totalDiscount)}</div>
+    <div class="toolbar"><label style="font-size:13px;font-weight:700;">মাস:</label><select onchange="onDiscMonth(this)">${monthOptionsHtml(DISC_MONTH, true)}</select></div>
+    <div class="grid grid-2" style="margin-bottom:16px;">
+      <div class="stat-card warn"><div class="label">পণ্যভিত্তিক মোট ছাড়</div><div class="value">${money(r2(lineTotal))}</div></div>
+      <div class="stat-card"><div class="label">পুরো বিলের উপর ছাড় (অর্ডার-স্তরে)</div><div class="value">${money(r2(orderLevel))}</div></div>
     </div>
     <div class="panel">
-      <h3>কোন কোন পণ্যে ছাড় দেওয়া হয়েছে</h3>
-      <p style="font-size:12.5px;color:var(--text-muted);">অর্ডারের কার্টে কোনো পণ্যের "একক মূল্য" তার নির্ধারিত বিক্রয়মূল্যের চেয়ে কম বসালেই সেটা এখানে স্বয়ংক্রিয়ভাবে তালিকাভুক্ত হয়ে যায় — আলাদা করে কিছু লিখতে হয় না।</p>
+      <h3>কোন পণ্যে কত ছাড় দেওয়া হয়েছে</h3>
+      <div class="table-wrap"><table><thead><tr><th>পণ্য</th><th>কতবার</th><th>মোট ছাড়</th></tr></thead><tbody>
+        ${prodRows.map(r => `<tr><td>${esc(r.name)}</td><td class="cell-num">${r.count}</td><td class="cell-num"><b>${money(r2(r.total))}</b></td></tr>`).join('') || '<tr><td colspan="3" class="empty-state">এখনো কোনো পণ্যে ছাড় দেওয়া হয়নি</td></tr>'}
+      </tbody></table></div>
+    </div>
+    <div class="panel">
+      <h3>ছাড়ের বিস্তারিত (অর্ডার ধরে)</h3>
+      <p style="font-size:12.5px;color:var(--text-muted);">কার্টে "এই পণ্যে ছাড়" ঘরে দেওয়া ছাড় ইনভয়েসে কাস্টমারকে দেখানো হয়। একক মূল্য সরাসরি কমালেও (পুরোনো নিয়মে) এখানে ধরা পড়ে, কিন্তু সেটা ইনভয়েসে ছাড় হিসেবে দেখায় না।</p>
       <div class="table-wrap"><table><thead><tr>
-        <th>তারিখ</th><th>অর্ডার</th><th>কাস্টমার</th><th>পণ্য</th><th>পরিমাণ</th><th>নির্ধারিত মূল্য</th><th>বিক্রিত মূল্য</th><th>মোট ছাড়</th>
+        <th>তারিখ</th><th>অর্ডার</th><th>কাস্টমার</th><th>পণ্য</th><th>পরিমাণ</th><th>নির্ধারিত মূল্য</th><th>পণ্যে ছাড়</th><th>দাম কমানো</th><th>মোট ছাড়</th>
       </tr></thead><tbody>
-        ${rows.map(r=>`
-          <tr>
-            <td>${r.date}</td><td>${r.orderId}</td><td>${esc(r.customerName)}</td><td>${esc(r.productName)}</td>
-            <td class="cell-num">${r.qty}</td><td class="cell-num">${money(r.standardPrice)}</td><td class="cell-num">${money(r.actual)}</td>
-            <td class="cell-num">${money(r.lineDiscount)}</td>
-          </tr>`).join('') || `<tr><td colspan="8" class="empty-state">এখনো কোনো পণ্যে ছাড় দেওয়া হয়নি</td></tr>`}
+        ${rows.map(r => `<tr><td>${r.date}</td><td>${r.orderId}</td><td>${esc(r.customerName)}</td><td>${esc(r.productName)}</td>
+          <td class="cell-num">${esc(String(r.qty))}</td><td class="cell-num">${money(r.std)}</td><td class="cell-num">${r.ld>0?money(r.ld):'—'}</td><td class="cell-num">${r.priceDisc>0?money(r2(r.priceDisc)):'—'}</td><td class="cell-num"><b>${money(r2(r.total))}</b></td></tr>`).join('') || '<tr><td colspan="9" class="empty-state">এখনো কোনো পণ্যে ছাড় দেওয়া হয়নি</td></tr>'}
       </tbody></table></div>
     </div>
   `;
@@ -3078,7 +3102,7 @@ function drawInvoice(){
     const p = CACHE.products.find(x=>x.id===it.productId);
     return `<tr>
       <td>${esc(p?p.name:'—')}</td>
-      <td class="cell-num">${fmtItem(it, p)}</td><td class="cell-num">${money(it.unitPrice)}${p?.unit?`/${esc(p.unit)}`:''}</td><td class="cell-num">${money(lineAmt(it))}</td>
+      <td class="cell-num">${fmtItem(it, p)}</td><td class="cell-num">${money(it.unitPrice)}${p?.unit?`/${esc(p.unit)}`:''}</td><td class="cell-num">${lineDisc(it)>0 ? `− ${money(lineDisc(it))}${it.discType==='pct'?`<br><span class="muted-cell" style="font-size:10.5px;">(${it.discVal}%)</span>`:''}` : '<span class="muted-cell">—</span>'}</td><td class="cell-num">${money(lineAmt(it))}</td>
     </tr>`;
   }).join('');
 
@@ -3097,7 +3121,7 @@ function drawInvoice(){
         <div style="text-align:left">${esc(o.customerName)}<br>${esc(o.phone)}<br>${esc(o.address)}</div>
       </div>
       <table>
-        <thead><tr><th>পণ্য</th><th>পরিমাণ</th><th>একক মূল্য</th><th>মোট</th></tr></thead>
+        <thead><tr><th>পণ্য</th><th>পরিমাণ</th><th>একক মূল্য</th><th>ছাড়</th><th>মোট</th></tr></thead>
         <tbody>${itemRows}</tbody>
       </table>
       <table style="margin-top:8px;">
@@ -3105,6 +3129,7 @@ function drawInvoice(){
         ${o.discount>0 ? `<tr><td>ছাড় / ডিসকাউন্ট</td><td class="cell-num">− ${money(o.discount)}</td></tr>` : ''}
       </table>
       <div class="invoice-total-row"><span>সর্বমোট</span><span>${money(o.total)}</span></div>
+      ${(() => { const sv = items.reduce((t,it)=>t+lineDisc(it),0) + Number(o.discount||0); return sv>0 ? `<p style="font-size:12.5px;color:#0E7448;font-weight:700;margin-top:8px;">💚 এই কেনাকাটায় আপনার মোট সাশ্রয়: ${money(sv)}</p>` : ''; })()}
       <p style="font-size:11.5px;color:var(--text-muted);margin-top:10px;">পেমেন্ট স্ট্যাটাস: ${PAY_BN[o.paymentStatus]||o.paymentStatus} — পরিশোধিত ${money(o.paidAmount!=null?o.paidAmount:(o.paymentStatus==='Paid'?o.total:0))}${orderDue(o)>0 ? `, বকেয়া ${money(orderDue(o))}` : ''}</p>
       ${o.paymentMethod ? `<p style="font-size:11.5px;color:var(--text-muted);margin-top:2px;">পেমেন্টের ধরন: ${esc((PAY_METHODS.find(m=>m.value===o.paymentMethod)||{}).label || o.paymentMethod)}${o.transactionRef ? ` — ট্রানজেকশন আইডি/অ্যাকাউন্ট: ${esc(o.transactionRef)}` : ''}</p>` : ''}
       <div class="invoice-sign">
@@ -3171,7 +3196,7 @@ function shareWhatsapp(orderId){
   const items = orderItems(o);
   const lines = items.map(it=>{
     const p = CACHE.products.find(x=>x.id===it.productId);
-    return `${p?p.name:''} — ${fmtItem(it, p)} = ৳${lineAmt(it)}`;
+    return lineDisc(it)>0 ? `${p?p.name:''} — ${fmtItem(it, p)} = ৳${lineGross(it)} − ছাড় ৳${lineDisc(it)} = ৳${lineAmt(it)}` : `${p?p.name:''} — ${fmtItem(it, p)} = ৳${lineAmt(it)}`;
   }).join('\n');
   const text = `Avera Mart ইনভয়েস ${o.id}\nকাস্টমার: ${o.customerName}\n${lines}\nসর্বমোট: ৳${o.total}\nধন্যবাদ ${CACHE.settings.tagline||''} — Avera Mart থেকে কেনাকাটার জন্য।`;
   const phone = (o.phone||'').replace(/\D/g,'');
@@ -3441,7 +3466,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৩.৪';
+const APP_VERSION = '৩.৫';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{
