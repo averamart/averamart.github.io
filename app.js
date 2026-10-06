@@ -449,6 +449,7 @@ function go(page){
   document.getElementById('sidebarBackdrop').classList.remove('show');
   const titles = Object.fromEntries(NAV_ITEMS.map(i=>[i.key,i.label]));
   document.getElementById('pageTitle').textContent = titles[page] || '';
+  { const eb = document.getElementById('exportBtns'); if(eb) eb.classList.toggle('hidden', session.role==='delivery'); }
   const renderers = {
     dashboard: renderDashboard, products: renderProducts, orders: renderOrders,
     purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck, leaflet: renderLeaflet,
@@ -1125,6 +1126,203 @@ function lfSetFree(i, inp){
 }
 function lfMove(i, d){ const j = i+d; if(j<0 || j>=LF.items.length) return; const t = LF.items[i]; LF.items[i] = LF.items[j]; LF.items[j] = t; lfRenderItems(); lfPreviewSoon(); }
 function lfRemove(i){ LF.items.splice(i,1); lfRenderItems(); lfPreviewSoon(); }
+
+/* ============================================================
+   EXPORT — প্রতিটি ট্যাবে Excel ও PDF ডাউনলোড (পেইজে যা দেখছেন তা-ই; ভূমিকা অনুযায়ী যে কলাম দেখেন শুধু সেগুলোই)
+   ============================================================ */
+const EX_SKIP_HEADS = ['একশন','রিপোর্ট',''];
+function exClean(s){ return String(s==null?'':s).replace(/[ \t\u00a0]+/g,' ').replace(/ ?\n ?/g,'\n').trim(); }
+function exCellText(td){
+  const oS = [...td.querySelectorAll('select')], oI = [...td.querySelectorAll('input,textarea')];
+  const c = td.cloneNode(true);
+  c.querySelectorAll('select').forEach((x,i) => { const o = oS[i], opt = o && o.options[o.selectedIndex]; x.replaceWith(document.createTextNode(opt ? opt.text : '')); });
+  c.querySelectorAll('input,textarea').forEach((x,i) => { const o = oI[i]; x.replaceWith(document.createTextNode(o ? o.value : '')); });
+  c.querySelectorAll('button,script,style').forEach(b => b.remove());
+  c.querySelectorAll('br').forEach(b => b.replaceWith(document.createTextNode('\n')));
+  return exClean(c.textContent);
+}
+function exNow(){ return new Date().toLocaleString('en-GB',{timeZone:'Asia/Dhaka', day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}); }
+function exModel(){
+  const root = document.getElementById('pageContent'); if(!root) return null;
+  const tEl = document.getElementById('pageTitle'), title = (tEl && tEl.textContent.trim()) || 'রিপোর্ট';
+  const m = {title, when: exNow(), summary: [], tables: []};
+  const box = document.getElementById('invoiceBox');
+  if(box){
+    box.querySelectorAll('.invoice-meta > div').forEach((d,i) => {
+      const lines = exClean(d.innerHTML.replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]+>/g,'')).split('\n').filter(Boolean);
+      if(i===0) lines.forEach(l => { const k = l.split(':'); m.summary.push([k[0].trim(), k.slice(1).join(':').trim()]); });
+      else m.summary.push(['কাস্টমার', lines.join(', ')]);
+    });
+  }
+  root.querySelectorAll('.stat-card').forEach(cd => {
+    const l = cd.querySelector('.label'), v = cd.querySelector('.value'); if(!l || !v) return;
+    const sub = cd.querySelector('.sub');
+    m.summary.push([exClean(l.textContent), exClean(v.textContent) + (sub ? ' (' + exClean(sub.textContent) + ')' : '')]);
+  });
+  root.querySelectorAll('.invoice-total-row').forEach(r => { const sp = r.querySelectorAll('span'); if(sp.length>=2) m.summary.push([exClean(sp[0].textContent), exClean(sp[1].textContent)]); });
+  root.querySelectorAll('table').forEach(t => {
+    if(t.offsetParent===null) return;
+    const rows = [...t.rows]; if(!rows.length) return;
+    const hr = (t.tHead && t.tHead.rows.length) ? t.tHead.rows[0] : null;
+    const head = hr ? [...hr.cells].map(exCellText) : null, body = [];
+    rows.forEach(r => { if(r===hr) return; const cells = [...r.cells]; if(cells.length===1 && cells[0].colSpan>1) return; body.push(cells.map(exCellText)); });
+    if(!body.length) return;
+    const nc = Math.max(head ? head.length : 0, ...body.map(r => r.length)), keep = [];
+    for(let ci=0; ci<nc; ci++){
+      const hd = head ? (head[ci]||'').trim() : null;
+      if((head && EX_SKIP_HEADS.includes(hd)) || body.every(r => !(r[ci]||'').trim())) continue;
+      keep.push(ci);
+    }
+    if(!keep.length) return;
+    const panel = t.closest('.panel'), h3 = panel && panel.querySelector('h3');
+    m.tables.push({name: exClean(h3 ? h3.textContent : title), head: head ? keep.map(ci => head[ci]||'') : null, rows: body.map(r => keep.map(ci => r[ci]||''))});
+  });
+  if(currentPage==='leaflet' && typeof LF!=='undefined' && LF && LF.items.length){
+    const tl = {none:'শুধু দাম', newprice:'নতুন দাম', amount:'টাকা ছাড়', percent:'% ছাড়', bogo:'কিনলে ফ্রি'};
+    m.tables.push({name:'লিফলেটের পণ্য — ' + (LF.title||''), head:['ক্রম','পণ্য','অফারের ধরন','দেখানো দাম (৳)'], rows: LF.items.filter(it => lfProd(it.pid)).map((it,i) => { const p = lfProd(it.pid); return [String(i+1), p.name, tl[it.type]||'', String(lfPriceInfo(it,p).now)]; })});
+  }
+  return (m.summary.length || m.tables.length) ? m : null;
+}
+function exFileName(m){ return ('Avera-Mart-' + m.title + '-' + todayStr()).replace(/[\\/:*?"<>|]/g,'').replace(/\s+/g,'-'); }
+function exVal(t){
+  const s = String(t==null?'':t).trim(); if(s==='') return '';
+  const money = /^[+−\-]?\s*৳\s*[−\-]?[\d,]+(\.\d+)?$/.test(s) || /^[−\-]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s);
+  const plain = /^[−\-]?(0|[1-9]\d{0,8})(\.\d+)?$/.test(s);
+  if(money || plain){
+    const neg = /^[−\-]/.test(s) || /৳\s*[−\-]/.test(s), n = Number(s.replace(/[−\-+৳,\s]/g,''));
+    if(!isNaN(n)) return neg ? -n : n;
+  }
+  return s;
+}
+function exportExcel(){
+  const m = exModel();
+  if(!m){ alert('এই পেইজে Excel-এ নামানোর মতো তালিকা বা তথ্য নেই।'); return; }
+  if(typeof XLSX==='undefined'){ alert('Excel লাইব্রেরি লোড হয়নি — ইন্টারনেট চেক করে পেইজ রিফ্রেশ করুন।'); return; }
+  const wb = XLSX.utils.book_new(), used = new Set();
+  const uniq = n => { const b = (String(n).replace(/[\[\]:*?\/\\]/g,' ').trim().slice(0,26) || 'Sheet'); let x = b, i = 2; while(used.has(x.toLowerCase())) x = b + ' ' + (i++); used.add(x.toLowerCase()); return x; };
+  const widths = aoa => { const w = []; aoa.forEach(r => r.forEach((v,i) => { const l = Math.min(48, String(v).split('\n').reduce((a,b) => Math.max(a,b.length), 0) + 2); w[i] = Math.max(w[i]||8, l); })); return w.map(x => ({wch:x})); };
+  if(m.summary.length){
+    const aoa = [['Avera Mart — ' + m.title], [m.when], []].concat(m.summary.map(r => [r[0], exVal(r[1])]));
+    const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = widths(aoa); XLSX.utils.book_append_sheet(wb, ws, uniq('সারসংক্ষেপ'));
+  }
+  m.tables.forEach(t => {
+    const aoa = []; if(t.head) aoa.push(t.head);
+    t.rows.forEach(r => aoa.push(r.map(exVal)));
+    const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = widths(aoa); XLSX.utils.book_append_sheet(wb, ws, uniq(t.name));
+  });
+  XLSX.writeFile(wb, exFileName(m) + '.xlsx');
+}
+function exBuildPdf(jpegs, dims){
+  const enc = new TextEncoder(), parts = [], off = []; let pos = 0;
+  const push = x => { const b = typeof x==='string' ? enc.encode(x) : x; parts.push(b); pos += b.length; };
+  const N = jpegs.length;
+  push('%PDF-1.4\n');
+  off[1] = pos; push('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+  off[2] = pos; push(`2 0 obj\n<< /Type /Pages /Kids [${jpegs.map((_,i)=>`${3+3*i} 0 R`).join(' ')}] /Count ${N} >>\nendobj\n`);
+  jpegs.forEach((jb,i) => {
+    const [wPx,hPx,wPt,hPt] = dims[i], pg = 3+3*i, ct = 4+3*i, im = 5+3*i, content = `q ${wPt} 0 0 ${hPt} 0 0 cm /Im0 Do Q`;
+    off[pg] = pos; push(`${pg} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${wPt} ${hPt}] /Resources << /XObject << /Im0 ${im} 0 R >> >> /Contents ${ct} 0 R >>\nendobj\n`);
+    off[ct] = pos; push(`${ct} 0 obj\n<< /Length ${content.length} >>\nstream\n${content}\nendstream\nendobj\n`);
+    off[im] = pos; push(`${im} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${wPx} /Height ${hPx} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jb.length} >>\nstream\n`); push(jb); push('\nendstream\nendobj\n');
+  });
+  const total = 2+3*N, xref = pos;
+  push(`xref\n0 ${total+1}\n0000000000 65535 f \n`);
+  for(let n=1;n<=total;n++) push(`${String(off[n]).padStart(10,'0')} 00000 n \n`);
+  push(`trailer\n<< /Size ${total+1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`);
+  return new Blob(parts, {type:'application/pdf'});
+}
+async function exRenderPdf(m){
+  try{ await Promise.all([document.fonts.load(lfF(700,20),'অআকখগ'), document.fonts.load(lfF(500,20),'অআকখগ')]); }catch(e){}
+  const tables = (m.summary.length ? [{name:'সারসংক্ষেপ', head:null, rows:m.summary}] : []).concat(m.tables);
+  const maxCols = Math.max(0, ...tables.map(t => t.head ? t.head.length : ((t.rows[0]||[]).length)));
+  const land = maxCols > 6, PW = land ? 1684 : 1190, PH = land ? 1190 : 1684, MX = 44, TOP = 130, BOT = 64, FS = 19, LH = 26, PAD = 9;
+  const cv = document.createElement('canvas'); cv.width = PW; cv.height = PH; const c = cv.getContext('2d');
+  const FR = lfF(500, FS), FB = lfF(700, FS), availW = PW - 2*MX;
+  const wrapText = (txt, maxW, font) => {
+    c.font = font; const lines = [];
+    String(txt).split('\n').forEach(par => {
+      let cur = '';
+      par.split(' ').forEach(w => {
+        const t = cur ? cur + ' ' + w : w;
+        if(!cur || c.measureText(t).width <= maxW){ cur = t; return; }
+        lines.push(cur); cur = w;
+      });
+      while(c.measureText(cur).width > maxW && cur.length > 1){ let k = cur.length; while(k>1 && c.measureText(cur.slice(0,k)).width > maxW) k--; lines.push(cur.slice(0,k)); cur = cur.slice(k); }
+      lines.push(cur);
+    });
+    return lines.slice(0, 8);
+  };
+  const num = t => /^[+−\-]?\s*৳?\s*[\d,]+(\.\d+)?\s*%?$/.test(String(t).trim());
+  const pages = [[]]; let y = TOP;
+  const push = cmd => pages[pages.length-1].push(cmd);
+  const newPage = () => { pages.push([]); y = TOP; };
+  tables.forEach(t => {
+    const nc = t.head ? t.head.length : t.rows[0].length;
+    const mw = Array(nc).fill(0);
+    if(t.head){ c.font = FB; t.head.forEach((h,i) => { mw[i] = Math.max(mw[i], Math.max(...String(h).split('\n').map(l => c.measureText(l).width))); }); }
+    c.font = FR; t.rows.slice(0, 300).forEach(r => r.forEach((v,i) => { const w = Math.max(...String(v).split('\n').map(l => c.measureText(l).width)); if(w > mw[i]) mw[i] = w; }));
+    let cw = mw.map(w => Math.min(w, 430) + PAD*2); const sum = cw.reduce((a,b) => a+b, 0), sc = Math.min(availW/sum, 1.3);
+    cw = cw.map(w => Math.max(64, Math.floor(w*sc)));
+    let tot = cw.reduce((a,b) => a+b, 0); if(tot > availW){ const f = availW/tot; cw = cw.map(w => Math.max(40, Math.floor(w*f))); }
+    const headCells = t.head ? t.head.map((h,i) => wrapText(h, cw[i]-PAD*2, FB)) : null;
+    const headH = headCells ? Math.max(...headCells.map(l => l.length))*LH + 14 : 0;
+    const rowsL = t.rows.map(r => r.map((v,i) => wrapText(v, cw[i]-PAD*2, FR)));
+    const firstH = rowsL.length ? Math.max(...rowsL[0].map(l => l.length))*LH + 14 : 0;
+    if(y + 44 + headH + firstH > PH - BOT) newPage();
+    push({k:'title', y, text:t.name}); y += 44;
+    const drawHead = () => { if(headCells){ push({k:'head', y, h:headH, cw, cells:headCells}); y += headH; } };
+    drawHead();
+    rowsL.forEach((cells, ri) => {
+      const rh = Math.max(...cells.map(l => l.length))*LH + 14;
+      if(y + rh > PH - BOT){ newPage(); push({k:'title', y, text:t.name + ' (চলমান)'}); y += 44; drawHead(); }
+      push({k:'row', y, h:rh, cw, cells, alt: ri%2===1, raw:t.rows[ri]}); y += rh;
+    });
+    y += 26;
+  });
+  if(!pages[pages.length-1].length && pages.length>1) pages.pop();
+  const logo = await lfLoadImage('logo.jpg'), tag = (CACHE.settings.tagline||'').trim(), jpegs = [], dims = [];
+  const wPt = land ? 841.89 : 595.28, hPt = land ? 595.28 : 841.89;
+  for(let p=0; p<pages.length; p++){
+    c.fillStyle = '#fff'; c.fillRect(0,0,PW,PH);
+    const g = c.createLinearGradient(0,0,PW,0); g.addColorStop(0,'#17539F'); g.addColorStop(.6,'#1F78C8'); g.addColorStop(1,'#2DB57A');
+    c.fillStyle = g; c.fillRect(0,0,PW,96);
+    c.save(); c.beginPath(); c.arc(MX+34, 48, 34, 0, Math.PI*2); c.fillStyle = '#fff'; c.fill(); c.clip(); if(logo) c.drawImage(logo, MX, 14, 68, 68); c.restore();
+    c.textBaseline = 'alphabetic'; c.textAlign = 'left'; c.fillStyle = '#fff'; c.font = lfF(800, 34); c.fillText('Avera Mart', MX+86, 46);
+    if(tag){ c.font = lfF(500, 17); c.fillText(tag, MX+86, 74); }
+    c.textAlign = 'right'; c.font = lfF(800, 30); c.fillText(m.title, PW-MX, 46); c.font = lfF(500, 17); c.fillText(m.when, PW-MX, 74); c.textAlign = 'left';
+    pages[p].forEach(cmd => {
+      if(cmd.k==='title'){ c.fillStyle = '#12263F'; c.font = lfF(800, 24); c.fillText(cmd.text, MX, cmd.y+24); c.fillStyle = '#C9D6E4'; c.fillRect(MX, cmd.y+32, availW, 2); return; }
+      let x = MX;
+      if(cmd.k==='head'){
+        c.fillStyle = '#17539F'; c.fillRect(MX, cmd.y, cmd.cw.reduce((a,b)=>a+b,0), cmd.h);
+        cmd.cells.forEach((lines,i) => { c.fillStyle = '#fff'; c.font = FB; lines.forEach((ln,li) => c.fillText(ln, x+PAD, cmd.y+LH*(li+1)-2+5)); x += cmd.cw[i]; });
+        return;
+      }
+      const tw = cmd.cw.reduce((a,b)=>a+b,0);
+      if(cmd.alt){ c.fillStyle = '#F2F6FB'; c.fillRect(MX, cmd.y, tw, cmd.h); }
+      c.fillStyle = '#DDE5EE'; c.fillRect(MX, cmd.y+cmd.h-1, tw, 1);
+      cmd.cells.forEach((lines,i) => {
+        c.font = FR; c.fillStyle = '#12263F'; const right = num(cmd.raw[i]);
+        lines.forEach((ln,li) => { c.textAlign = right ? 'right' : 'left'; c.fillText(ln, right ? x+cmd.cw[i]-PAD : x+PAD, cmd.y+LH*(li+1)-2+5); });
+        c.textAlign = 'left'; x += cmd.cw[i];
+      });
+    });
+    c.fillStyle = '#C9D6E4'; c.fillRect(MX, PH-46, availW, 1);
+    c.fillStyle = '#6B7C93'; c.font = lfF(500, 16); c.textAlign = 'center'; c.fillText(`Avera Mart · পাতা ${bnN(p+1)}/${bnN(pages.length)}`, PW/2, PH-20); c.textAlign = 'left';
+    const blob = await new Promise(res => cv.toBlob(res, 'image/jpeg', 0.9));
+    jpegs.push(new Uint8Array(await blob.arrayBuffer())); dims.push([PW, PH, wPt, hPt]);
+  }
+  return exBuildPdf(jpegs, dims);
+}
+async function exportPdf(){
+  const m = exModel();
+  if(!m){ alert('এই পেইজে PDF-এ নামানোর মতো তালিকা বা তথ্য নেই।'); return; }
+  const btn = document.querySelector('#exportBtns button:nth-child(2)'), old = btn ? btn.innerHTML : '';
+  if(btn){ btn.disabled = true; btn.innerHTML = '⏳'; }
+  try{ const blob = await exRenderPdf(m); lfSaveBlob(blob, exFileName(m) + '.pdf'); }
+  catch(e){ alert('PDF তৈরি হয়নি: ' + (e.message||e)); }
+  finally{ if(btn){ btn.disabled = false; btn.innerHTML = old; } }
+}
 
 /* ============================================================
    STOCK VALUE CHECK — স্টক মূল্য যাচাই (ভাউচার/ক্রয় খাতার সাথে মিলিয়ে দেখার জন্য)
@@ -3466,7 +3664,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৩.৫';
+const APP_VERSION = '৩.৬';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{

@@ -302,3 +302,10 @@ tr.row-hl td{background:#FFF6C9 !important;}
 .badge-locked{background:#FDE8E8;color:#B3261E;}
 .badge-open{background:#E7F6EE;color:#145C40;}
 select:disabled{opacity:.55;cursor:not-allowed;}
+
+/* ===== Excel / PDF export buttons (every page) ===== */
+.export-btns{display:flex;gap:6px;flex:none;}
+.export-btns button{padding:7px 11px;border:1px solid var(--border);background:var(--surface);border-radius:8px;font-size:13px;font-weight:600;color:var(--navy);min-height:38px;}
+.export-btns button:active{background:var(--bg);}
+.export-btns.hidden{display:none;}
+@media(max-width:560px){ .ex-l{display:none;} .export-btns button{padding:7px 12px;font-size:17px;} }

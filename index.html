@@ -75,7 +75,11 @@
   <main class="main-area">
     <header class="top-bar">
       <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
-      <h2 id="pageTitle">ড্যাশবোর্ড</h2>
+      <h2 id="pageTitle" style="flex:1;min-width:0;">ড্যাশবোর্ড</h2>
+      <div class="export-btns" id="exportBtns">
+        <button onclick="exportExcel()" title="এই পেইজের তালিকা Excel ফাইলে নামান">📊<span class="ex-l"> Excel</span></button>
+        <button onclick="exportPdf()" title="এই পেইজ PDF ফাইলে নামান">📄<span class="ex-l"> PDF</span></button>
+      </div>
     </header>
     <div id="pageContent" class="page-content"></div>
   </main>
