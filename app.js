@@ -17,6 +17,7 @@ const CACHE = {
   contributions: [],
   closings: [],
   leaflets: [],
+  investments: [],
   settings: {
     dividendPercent: 50,
     productCategories: ['খাদ্যশস্য','ডাল','তেল','মসলা','অর্গানিক আইটেম','অন্যান্য'],
@@ -28,7 +29,7 @@ const CACHE = {
   },
   users: { admin:{pin:'1234'}, manager:{pin:'2222'}, delivery:{pin:'3333'} }
 };
-const LOADED = { products:false, orders:false, purchases:false, expenses:false, returns:false, shareholders:false, contributions:false, closings:false, leaflets:false, settings:false, users:false };
+const LOADED = { products:false, orders:false, purchases:false, expenses:false, returns:false, shareholders:false, contributions:false, closings:false, leaflets:false, investments:false, settings:false, users:false };
 
 const DEFAULT_PRODUCTS = [
   {id:'P001', name:'প্রিমিয়াম মিনিকেট চাল (৫ কেজি)', category:'খাদ্যশস্য', cost:340, retail:390, shareholder:365, stock:40, minStock:10},
@@ -77,7 +78,7 @@ function renderDataLossBar(){
   const names = Object.keys(SAFE_ALERT);
   if(!names.length){ if(bar) bar.remove(); return; }
   if(!bar){ bar = document.createElement('div'); bar.id = 'dataLossBar'; bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#B3261E;color:#fff;padding:12px 14px;font-size:13.5px;line-height:1.6;box-shadow:0 -2px 10px rgba(0,0,0,.3);'; document.body.appendChild(bar); }
-  const lbl = {products:'পণ্য',orders:'অর্ডার',purchases:'ক্রয়',expenses:'খরচ/আয়',returns:'রিটার্ন',shareholders:'শেয়ারহোল্ডার',contributions:'জমা',closings:'মাস ক্লোজিং'};
+  const lbl = {products:'পণ্য',orders:'অর্ডার',purchases:'ক্রয়',expenses:'খরচ/আয়',returns:'রিটার্ন',shareholders:'শেয়ারহোল্ডার',contributions:'জমা',closings:'মাস ক্লোজিং', investments:'বিনিয়োগ', leaflets:'লিফলেট'};
   const detail = names.map(n => `${lbl[n]||n}: ${SAFE_ALERT[n].prevN}টি → ${SAFE_ALERT[n].nowN}টি`).join(' · ');
   const when = fmtDT(new Date(SAFE_ALERT[names[0]].ts).toISOString());
   bar.innerHTML = `⚠️ <b>ডেটা হঠাৎ অনেক কমে গেছে!</b> (${detail})<br>এই ডিভাইসে ${when}-এর নিরাপদ কপি আছে। ${isAdmin()?`<button onclick="restoreSafeCopy()" style="margin-top:6px;background:#fff;color:#B3261E;border:0;border-radius:6px;padding:7px 12px;font-weight:700;">⏪ নিরাপদ কপি থেকে ফেরত আনুন</button> <button onclick="dismissSafeAlert()" style="margin-top:6px;background:transparent;color:#fff;border:1px solid #fff;border-radius:6px;padding:7px 12px;">না, এটাই ঠিক</button>`:'অ্যাডমিনকে এখনই জানান।'}`;
@@ -123,7 +124,7 @@ function attachListeners(){
     () => { docRef(name).set({items: seedItems}); CACHE[name] = seedItems; },
     d => d.items || []);
   arr('products', DEFAULT_PRODUCTS);
-  ['orders','purchases','expenses','returns','shareholders','contributions','closings','leaflets'].forEach(n => arr(n, []));
+  ['orders','purchases','expenses','returns','shareholders','contributions','closings','leaflets','investments'].forEach(n => arr(n, []));
   listenDoc('settings', data => {
     // older deployments may not have the category lists yet — merge in the defaults once
     const merged = {
@@ -161,12 +162,12 @@ function onCloudUpdate(){
     const mh = document.getElementById('modalHolder');
     if(mh && mh.innerHTML.trim()) return;
     if(currentPage==='returns' && (document.getElementById('ret_order')||{}).value) return;
-    if(currentPage==='leaflet') return;   // লিফলেট এডিটর চলাকালে রিফ্রেশ নয়
+    if(currentPage==='leaflet' || currentPage==='catalog') return;   // লিফলেট এডিটর চলাকালে রিফ্রেশ নয়
     if(currentPage==='invoice'){ renderInvoice((document.getElementById('inv_order')||{}).value || ''); return; }
     // live re-render current page so every device sees updates instantly
     const renderers = {
       dashboard: renderDashboard, products: renderProducts, orders: renderOrders,
-      purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck, leaflet: renderLeaflet,
+      purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck, leaflet: renderLeaflet, catalog: renderCatalog,
       invoice: renderInvoice, settings: renderSettings
     };
     (renderers[currentPage] || renderDashboard)();
@@ -404,6 +405,7 @@ const NAV_ITEMS = [
   {key:'products', label:'পণ্য তালিকা', icon:'📦', roles:['admin','manager']},
   {key:'orders', label:'অর্ডার ও সেলস', icon:'🛍️', roles:['admin','manager','delivery']},
   {key:'leaflet', label:'অফার লিফলেট', icon:'📣', roles:['admin','manager']},
+  {key:'catalog', label:'পণ্য ক্যাটালগ', icon:'📖', roles:['admin','manager']},
   {key:'purchases', label:'ক্রয় খাতা', icon:'🛒', roles:['admin','manager']},
   {key:'expenses', label:'খরচ খাতা', icon:'💸', roles:['admin','manager']},
   {key:'dues', label:'বকেয়া হিসাব', icon:'📒', roles:['admin','manager']},
@@ -452,7 +454,7 @@ function go(page){
   { const eb = document.getElementById('exportBtns'); if(eb) eb.classList.toggle('hidden', session.role==='delivery'); }
   const renderers = {
     dashboard: renderDashboard, products: renderProducts, orders: renderOrders,
-    purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck, leaflet: renderLeaflet,
+    purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck, leaflet: renderLeaflet, catalog: renderCatalog,
     invoice: renderInvoice, settings: renderSettings
   };
   (renderers[page] || renderDashboard)();
@@ -515,7 +517,7 @@ function guardDate(d, what){ return guardDates([d], what); }
 // যে মাসগুলোতে কোনো এন্ট্রি আছে (+ চলমান মাস + লক করা মাস), পুরোনো থেকে নতুন
 function monthsList(){
   const set = new Set([curMonth()]);
-  [CACHE.orders, CACHE.purchases, CACHE.expenses, CACHE.returns, CACHE.contributions].forEach(a => (a||[]).forEach(x => { const m = mOf(x.date); if(m) set.add(m); }));
+  [CACHE.orders, CACHE.purchases, CACHE.expenses, CACHE.returns, CACHE.contributions, CACHE.investments].forEach(a => (a||[]).forEach(x => { const m = mOf(x.date); if(m) set.add(m); }));
   (CACHE.closings||[]).forEach(c => set.add(c.month));
   return Array.from(set).sort();
 }
@@ -1181,6 +1183,10 @@ function exModel(){
     const tl = {none:'শুধু দাম', newprice:'নতুন দাম', amount:'টাকা ছাড়', percent:'% ছাড়', bogo:'কিনলে ফ্রি'};
     m.tables.push({name:'লিফলেটের পণ্য — ' + (LF.title||''), head:['ক্রম','পণ্য','অফারের ধরন','দেখানো দাম (৳)'], rows: LF.items.filter(it => lfProd(it.pid)).map((it,i) => { const p = lfProd(it.pid); return [String(i+1), p.name, tl[it.type]||'', String(lfPriceInfo(it,p).now)]; })});
   }
+  if(currentPage==='catalog' && typeof CAT!=='undefined' && CAT){
+    const rows = []; catGroups().forEach(g => g.items.forEach(p => rows.push([g.name, p.name, lfUnitLabel(p), CAT.showPrice ? String(lfBase(p)) : '', Number(p.stock)>0 ? 'আছে' : 'নেই'])));
+    if(rows.length) m.tables.push({name:'ক্যাটালগের পণ্য তালিকা', head:['ক্যাটাগরি','পণ্য','একক','দাম (৳)','স্টক'], rows});
+  }
   return (m.summary.length || m.tables.length) ? m : null;
 }
 function exFileName(m){ return ('Avera-Mart-' + m.title + '-' + todayStr()).replace(/[\\/:*?"<>|]/g,'').replace(/\s+/g,'-'); }
@@ -1325,6 +1331,275 @@ async function exportPdf(){
 }
 
 /* ============================================================
+   PRODUCT CATALOG — পণ্য ক্যাটালগ (কভার, সূচিপত্র, ক্যাটাগরি ধরে পাতা; PDF / JPG / WhatsApp)
+   নাম, একক, দাম, ক্যাটাগরি পণ্য তালিকা থেকে; ছবি লিফলেটের মতোই আলাদা ডকুমেন্টে। ক্রয়মূল্য কখনো যায় না।
+   ============================================================ */
+let CAT = null, CAT_PREV = 0, CAT_TIMER = null, CAT_TOK = 0;
+const CAT_IMG = new Map(), CAT_TOC_ROWS = 24;
+function bnYear(y){ return Number(y).toLocaleString('bn-BD', {useGrouping:false}); }
+function catDefaults(){
+  const st = CACHE.settings, cm = curMonth().split('-');
+  return {title:'পণ্য ক্যাটালগ', dateText: `${BN_MONTHS[Number(cm[1])-1]} ${bnYear(cm[0])}`, perPage:12, showPrice:true, hideZero:true, excludeHidden:true, cover:true, toc:true, cats:{},
+    tagline: st.tagline||'', footerNote:'ফ্রি হোম ডেলিভারি', footerSub: st.website||'', phone: st.phone||'', address: st.businessAddress||'', disclaimer:'দাম পরিবর্তনযোগ্য, স্টক থাকা সাপেক্ষে'};
+}
+function catLoad(){
+  if(CAT) return;
+  CAT = catDefaults();
+  try{ const raw = JSON.parse(localStorage.getItem('AM_catalog_opts')||'null'); if(raw && typeof raw==='object') CAT = {...CAT, ...raw}; }catch(e){}
+}
+function catSave(){ try{ localStorage.setItem('AM_catalog_opts', JSON.stringify(CAT)); }catch(e){} }
+function catVal(k){ return String(CAT[k]==null ? '' : CAT[k]); }
+function catGroups(){
+  const map = {};
+  CACHE.products.forEach(p => {
+    if(CAT.excludeHidden && p.hidden) return;
+    if(CAT.hideZero && !(Number(p.stock)>0)) return;
+    const c = p.category || 'অন্যান্য'; if(CAT.cats[c]===false) return;
+    (map[c] = map[c] || []).push(p);
+  });
+  const order = CACHE.settings.productCategories || [], names = Object.keys(map);
+  names.sort((a,b) => { const ia = order.indexOf(a), ib = order.indexOf(b); if(ia>-1 && ib>-1) return ia-ib; if(ia>-1) return -1; if(ib>-1) return 1; return a.localeCompare(b,'bn'); });
+  return names.map(n => ({name:n, items: map[n].slice().sort((a,b) => String(a.name).localeCompare(String(b.name),'bn'))}));
+}
+function catAllCats(){
+  const cnt = {}; CACHE.products.forEach(p => { if(CAT.excludeHidden && p.hidden) return; if(CAT.hideZero && !(Number(p.stock)>0)) return; const c = p.category||'অন্যান্য'; cnt[c] = (cnt[c]||0)+1; });
+  return cnt;
+}
+function catPlan(){
+  const groups = catGroups(), g = LF_GRIDS[Number(CAT.perPage)] || LF_GRIDS[12], per = g.cols*g.rows, catPages = [];
+  groups.forEach(gr => { const parts = Math.ceil(gr.items.length/per); for(let i=0;i<gr.items.length;i+=per) catPages.push({type:'cat', cat:gr.name, items:gr.items.slice(i,i+per), part:i/per+1, parts}); });
+  const pages = [], tocN = (CAT.toc && groups.length) ? Math.ceil(groups.length/CAT_TOC_ROWS) : 0;
+  if(CAT.cover) pages.push({type:'cover'});
+  for(let k=0;k<tocN;k++) pages.push({type:'toc', k});
+  catPages.forEach(p => pages.push(p));
+  const starts = {}; pages.forEach((p,i) => { p.no = i+1; if(p.type==='cat' && !(p.cat in starts)) starts[p.cat] = i+1; });
+  const total = groups.reduce((t,gr) => t + gr.items.length, 0);
+  return {pages, groups, starts, g, total};
+}
+async function catImg(pid){
+  const p = lfProd(pid); if(!p || !p.hasImg) return null;
+  const key = pid + ':' + p.imgV; if(CAT_IMG.has(key)) return CAT_IMG.get(key);
+  try{
+    const snap = await docRef('img__'+pid).get(); if(!snap.exists) return null;
+    const img = await lfLoadImage(snap.data().data);
+    CAT_IMG.set(key, img); if(CAT_IMG.size > 40) CAT_IMG.delete(CAT_IMG.keys().next().value);
+    return img;
+  }catch(e){ return null; }
+}
+function catChrome(c, pill, no, total){
+  const W = LF_W, H = LF_H;
+  c.fillStyle = '#EAF2FA'; c.fillRect(0,0,W,H);
+  let g = c.createLinearGradient(0,0,W,200); g.addColorStop(0,'#17539F'); g.addColorStop(.55,'#1F78C8'); g.addColorStop(1,'#2DB57A');
+  c.fillStyle = g; c.fillRect(0,0,W,196);
+  c.fillStyle = 'rgba(255,255,255,.10)'; c.beginPath(); c.arc(W-70, -10, 170, 0, Math.PI*2); c.fill();
+  c.save(); c.beginPath(); c.arc(114, 98, 70, 0, Math.PI*2); c.closePath(); c.fillStyle = '#fff'; c.fill(); c.clip();
+  if(LF_LOGO) c.drawImage(LF_LOGO, 44, 28, 140, 140); c.restore();
+  c.beginPath(); c.arc(114, 98, 70, 0, Math.PI*2); c.lineWidth = 5; c.strokeStyle = '#fff'; c.stroke();
+  c.fillStyle = '#fff'; c.textAlign = 'left'; c.textBaseline = 'alphabetic';
+  const title = catVal('title').trim() || 'পণ্য ক্যাটালগ';
+  lfFit(c, title, W-214-36, 78, 44, 800); c.fillText(title, 214, 100);
+  const tag = catVal('tagline').trim(); if(tag){ c.font = lfF(600, 28); c.fillStyle = 'rgba(255,255,255,.95)'; c.fillText(tag, 214, 146); }
+  if(pill){ c.font = lfF(800, 26); let t = pill, tw = c.measureText(t).width; while(tw > 520 && t.length > 4){ t = t.slice(0,-1); tw = c.measureText(t+'…').width; } if(t!==pill) t += '…'; const dw = c.measureText(t).width + 44; lfRR(c, W-30-dw, 148, dw, 42, 21); c.fillStyle = '#FFC83D'; c.fill(); c.fillStyle = '#12263F'; c.fillText(t, W-30-dw+22, 178); }
+  const dis = catVal('disclaimer').trim();
+  c.fillStyle = '#6B7C93'; c.font = lfF(500, 18); c.textAlign = 'center';
+  c.fillText((dis||'') + `${dis?'  ·  ':''}পাতা ${bnN(no)}/${bnN(total)}`, W/2, H-142);
+  g = c.createLinearGradient(0,H-130,W,H); g.addColorStop(0,'#17539F'); g.addColorStop(.6,'#1B8A8F'); g.addColorStop(1,'#2DB57A');
+  c.fillStyle = g; c.fillRect(0,H-130,W,130);
+  c.textAlign = 'left'; c.fillStyle = '#fff';
+  const note = catVal('footerNote').trim(); if(note){ lfFit(c, note, 470, 40, 26, 800); c.fillText(note, 40, H-70); }
+  const sub = catVal('footerSub').trim(); if(sub){ c.font = lfF(600, 24); c.fillText(sub, 40, H-30); }
+  c.textAlign = 'right';
+  const ph = catVal('phone').trim(); if(ph){ lfFit(c, ph, 460, 36, 24, 800); c.fillText(ph, W-40, H-76); }
+  c.font = lfF(500, 21); lfWrap(c, catVal('address'), 470, 2).forEach((ln,i) => c.fillText(ln, W-40, H-44+i*24));
+  c.textAlign = 'left';
+}
+function catCard(c, p, x, y, w, h, s, img){
+  const out = !(Number(p.stock)>0);
+  c.save(); c.shadowColor = 'rgba(18,38,63,.12)'; c.shadowBlur = 12*s; c.shadowOffsetY = 4*s;
+  lfRR(c, x, y, w, h, 22*s); c.fillStyle = '#fff'; c.fill(); c.restore();
+  const zx = x+8*s, zy = y+8*s, zw = w-16*s, zh = Math.round(h*0.56);
+  lfGlow(c, zx, zy, zw, zh);
+  c.save(); if(out) c.globalAlpha = 0.4;
+  if(img) lfContain(c, img, zx+8*s, zy+4*s, zw-16*s, zh-6*s); else lfNoImg(c, p.name, zx, zy, zw, zh);
+  c.restore(); c.textBaseline = 'alphabetic';
+  lfPill(c, lfUnitLabel(p), x+10*s, zy+zh-(17*s+12)-2, Math.max(12, Math.round(17*s)), 'rgba(238,243,248,.95)', '#4D6079');
+  if(out) lfPill(c, 'স্টক নেই', x+w-10*s-(c.measureText('স্টক নেই').width+22), zy+4, Math.max(12, Math.round(17*s)), '#FDE8E8', '#B3261E');
+  const nf = Math.max(14, Math.round(24*s)), lh = Math.round(28*s), ny = zy+zh+Math.round(28*s);
+  c.fillStyle = '#12263F'; c.font = lfF(700, nf); c.textAlign = 'left';
+  lfWrap(c, p.name, w-24*s, 2).forEach((ln,i) => c.fillText(ln, x+12*s, ny+i*lh));
+  if(CAT.showPrice){ c.font = lfF(800, Math.max(22, Math.round(42*s))); c.fillStyle = '#17539F'; c.fillText(bnTaka(lfBase(p)), x+12*s, y+h-Math.round(14*s)); }
+}
+async function catDrawPage(canvas, pg, plan){
+  const c = canvas.getContext('2d'); canvas.width = LF_W; canvas.height = LF_H;
+  const W = LF_W, H = LF_H, total = plan.pages.length;
+  if(!LF_LOGO) LF_LOGO = await lfLoadImage('logo.jpg');
+  if(pg.type==='cover'){
+    let g = c.createLinearGradient(0,0,W,H); g.addColorStop(0,'#17539F'); g.addColorStop(.5,'#1F78C8'); g.addColorStop(1,'#2DB57A');
+    c.fillStyle = g; c.fillRect(0,0,W,H);
+    c.fillStyle = 'rgba(255,255,255,.08)'; [[900,200,320],[120,1250,380],[980,1180,200]].forEach(a => { c.beginPath(); c.arc(a[0],a[1],a[2],0,Math.PI*2); c.fill(); });
+    c.save(); c.beginPath(); c.arc(W/2, 440, 170, 0, Math.PI*2); c.fillStyle = '#fff'; c.fill(); c.clip(); if(LF_LOGO) c.drawImage(LF_LOGO, W/2-165, 275, 330, 330); c.restore();
+    c.beginPath(); c.arc(W/2, 440, 170, 0, Math.PI*2); c.lineWidth = 10; c.strokeStyle = 'rgba(255,255,255,.9)'; c.stroke();
+    c.textAlign = 'center'; c.textBaseline = 'alphabetic'; c.fillStyle = '#fff';
+    const title = catVal('title').trim() || 'পণ্য ক্যাটালগ'; lfFit(c, title, 940, 118, 60, 800); c.fillText(title, W/2, 790);
+    const tag = catVal('tagline').trim(); if(tag){ c.font = lfF(600, 38); c.fillStyle = 'rgba(255,255,255,.95)'; c.fillText(tag, W/2, 860); }
+    const dt = catVal('dateText').trim(); if(dt){ c.font = lfF(800, 34); const dw = c.measureText(dt).width + 70; lfRR(c, W/2-dw/2, 910, dw, 66, 33); c.fillStyle = '#FFC83D'; c.fill(); c.fillStyle = '#12263F'; c.fillText(dt, W/2, 955); }
+    c.fillStyle = 'rgba(255,255,255,.92)'; c.font = lfF(600, 30); c.fillText(`${bnN(plan.total)}টি পণ্য · ${bnN(plan.groups.length)}টি ক্যাটাগরি`, W/2, 1050);
+    lfRR(c, 90, 1180, W-180, 250, 28); c.fillStyle = 'rgba(255,255,255,.16)'; c.fill();
+    c.fillStyle = '#fff'; let yy = 1245;
+    const note = catVal('footerNote').trim(); if(note){ lfFit(c, note, W-260, 40, 26, 800); c.fillText(note, W/2, yy); yy += 52; }
+    const ph = catVal('phone').trim(); if(ph){ lfFit(c, ph, W-260, 38, 26, 800); c.fillText(ph, W/2, yy); yy += 46; }
+    c.font = lfF(500, 24); lfWrap(c, catVal('address'), W-260, 2).forEach(ln => { c.fillText(ln, W/2, yy); yy += 32; });
+    const sub = catVal('footerSub').trim(); if(sub){ c.font = lfF(700, 26); c.fillText(sub, W/2, yy+4); }
+    c.textAlign = 'left'; return;
+  }
+  catChrome(c, pg.type==='toc' ? 'সূচিপত্র' : (pg.parts>1 ? `${pg.cat} (${bnN(pg.part)}/${bnN(pg.parts)})` : pg.cat), pg.no, total);
+  if(pg.type==='toc'){
+    const rows = plan.groups.slice(pg.k*CAT_TOC_ROWS, (pg.k+1)*CAT_TOC_ROWS);
+    const roomy = rows.length <= 12, step = roomy ? 78 : 46, fs = roomy ? 36 : 30;
+    rows.forEach((gr,i) => {
+      const y = 276 + i*step;
+      c.textAlign = 'left'; c.font = lfF(700, fs); c.fillStyle = '#12263F'; c.fillText(gr.name, 70, y);
+      const nw = c.measureText(gr.name).width; c.font = lfF(500, fs-8); c.fillStyle = '#6B7C93'; c.fillText(`(${bnN(gr.items.length)}টি পণ্য)`, 70+nw+14, y);
+      c.textAlign = 'right'; c.font = lfF(800, fs); c.fillStyle = '#17539F'; c.fillText(`পাতা ${bnN(plan.starts[gr.name])}`, W-70, y);
+      c.fillStyle = '#D5E0EC'; c.fillRect(70, y+(roomy?20:12), W-140, 1.5);
+    });
+    c.textAlign = 'left'; return;
+  }
+  const g = plan.g, gx = 30, gy = 214, gapX = 16, gapY = 14, gridH = (H-130-34)-gy;
+  const colW = Math.floor((W-60-gapX*(g.cols-1))/g.cols), rowH = Math.floor((gridH-gapY*(g.rows-1))/g.rows), sc = Math.max(0.6, Math.min(colW/329, rowH/276, 1));
+  const imgs = {}; await Promise.all(pg.items.map(async p => { imgs[p.id] = await catImg(p.id); }));
+  pg.items.forEach((p,k) => catCard(c, p, gx+(k%g.cols)*(colW+gapX), gy+Math.floor(k/g.cols)*(rowH+gapY), colW, rowH, sc, imgs[p.id]));
+}
+async function catFonts(){ try{ await Promise.all([document.fonts.load(lfF(800,40),'অআকখগ'), document.fonts.load(lfF(600,24),'অআকখগ'), document.fonts.load(lfF(700,24),'অআকখগ')]); }catch(e){} if(!LF_LOGO) LF_LOGO = await lfLoadImage('logo.jpg'); }
+async function catRenderAll(onProgress){
+  await catFonts(); const plan = catPlan(), cv = document.createElement('canvas'), out = [];
+  for(let i=0;i<plan.pages.length;i++){ await catDrawPage(cv, plan.pages[i], plan); out.push(await lfBlob(cv)); if(onProgress) onProgress(i+1, plan.pages.length); }
+  return out;
+}
+function catBusy(msg){ const el = document.getElementById('catBusy'); if(el) el.textContent = msg || ''; }
+function catFileBase(){ return (catVal('title').trim() || 'ক্যাটালগ').replace(/[\\/:*?"<>|]/g,'').replace(/\s+/g,'-'); }
+async function catDownloadPdf(){
+  const plan = catPlan(); if(!plan.pages.length){ alert('ক্যাটালগে কোনো পণ্য নেই — অপশন দেখুন'); return; }
+  try{
+    const blobs = await catRenderAll((i,n) => catBusy(`PDF তৈরি হচ্ছে… ${bnN(i)}/${bnN(n)}`)), jp = [], dims = [];
+    for(const b of blobs){ jp.push(new Uint8Array(await b.arrayBuffer())); dims.push([LF_W, LF_H, 595.28, 841.89]); }
+    lfSaveBlob(exBuildPdf(jp, dims), catFileBase() + '.pdf'); catBusy('✅ PDF তৈরি হয়েছে');
+  }catch(e){ catBusy(''); alert('PDF তৈরি হয়নি: ' + (e.message||e)); }
+}
+async function catDownloadJpg(){
+  const plan = catPlan(); if(!plan.pages.length){ alert('ক্যাটালগে কোনো পণ্য নেই — অপশন দেখুন'); return; }
+  try{
+    const blobs = await catRenderAll((i,n) => catBusy(`ছবি তৈরি হচ্ছে… ${bnN(i)}/${bnN(n)}`));
+    for(let i=0;i<blobs.length;i++){ lfSaveBlob(blobs[i], `${catFileBase()}-পাতা${i+1}.jpg`); await new Promise(r => setTimeout(r, 450)); }
+    catBusy('✅ ছবি নামানো হয়েছে');
+  }catch(e){ catBusy(''); alert('ছবি তৈরি হয়নি: ' + (e.message||e)); }
+}
+async function catShare(){
+  const plan = catPlan(); if(!plan.pages.length){ alert('ক্যাটালগে কোনো পণ্য নেই — অপশন দেখুন'); return; }
+  try{
+    const blobs = await catRenderAll((i,n) => catBusy(`তৈরি হচ্ছে… ${bnN(i)}/${bnN(n)}`)), jp = [], dims = [];
+    for(const b of blobs){ jp.push(new Uint8Array(await b.arrayBuffer())); dims.push([LF_W, LF_H, 595.28, 841.89]); }
+    const file = new File([exBuildPdf(jp, dims)], catFileBase() + '.pdf', {type:'application/pdf'}); catBusy('');
+    if(navigator.canShare && navigator.canShare({files:[file]})){ try{ await navigator.share({files:[file], title: catVal('title')}); return; }catch(e){ if(e && e.name==='AbortError') return; } }
+    lfSaveBlob(file, file.name); alert('এই ব্রাউজার থেকে সরাসরি শেয়ার হচ্ছে না — PDF ডাউনলোড হয়েছে। WhatsApp-এ ফাইলটা সংযুক্ত করে পাঠান।');
+  }catch(e){ catBusy(''); alert('শেয়ার করা যায়নি: ' + (e.message||e)); }
+}
+/* ---- একসাথে অনেক ছবি আপলোড ---- */
+function catKey(s){ return String(s||'').normalize('NFC').toLowerCase().replace(/\.[a-z0-9]{2,5}$/i,'').replace(/[^\p{L}\p{M}\p{N}]+/gu,''); }
+async function catBulkImages(input){
+  const files = [...input.files]; input.value = ''; if(!files.length) return;
+  const byKey = {}; CACHE.products.forEach(p => { byKey[catKey(p.name)] = p.id; byKey[catKey(p.id)] = p.id; });
+  const products = CACHE.products.map(p => ({...p})), done = [], miss = []; let n = 0;
+  for(const f of files){
+    n++; const pid = byKey[catKey(f.name)];
+    if(!pid){ miss.push(f.name); continue; }
+    catBusy(`ছবি আপলোড হচ্ছে… ${bnN(n)}/${bnN(files.length)}`);
+    try{
+      const data = await lfProcessFile(f), v = Date.now() + n;
+      docRef('img__'+pid).set({data, v}).catch(e => saveFailed('ছবি', e));
+      const i = products.findIndex(p => p.id===pid); products[i] = {...products[i], hasImg:true, imgV:v}; done.push(pid);
+    }catch(e){ miss.push(f.name + ' (পড়া যায়নি)'); }
+  }
+  if(done.length) saveCollection('products', products);
+  catBusy(`✅ ${bnN(done.length)}টি ছবি বসেছে` + (miss.length ? ` · ${bnN(miss.length)}টি মেলেনি` : ''));
+  if(miss.length) alert('এই ফাইলগুলোর নাম কোনো পণ্যের নামের সাথে মেলেনি:\n\n' + miss.slice(0,15).join('\n') + (miss.length>15 ? '\n...' : '') + '\n\nফাইলের নাম পণ্যের নামের মতো (বা পণ্য আইডি, যেমন P001) দিয়ে আবার চেষ্টা করুন।');
+  catRefresh(true);
+}
+/* ---- পেইজ ---- */
+function catSet(k, v){ CAT[k] = v; catSave(); catPrevSoon(); if(k==='hideZero' || k==='excludeHidden' || k==='perPage') catRefresh(false); }
+function catToggleCat(name, on){ CAT.cats[name] = on; catSave(); catRefresh(false); catPrevSoon(); }
+function catAllCatsSet(on){ const cnt = catAllCats(); Object.keys(cnt).forEach(n => { CAT.cats[n] = on; }); catSave(); renderCatalog(); }
+function catFromSettings(){ const d = catDefaults(); ['tagline','footerSub','phone','address'].forEach(k => { CAT[k] = d[k]; }); catSave(); renderCatalog(); }
+function catField(k, label, ph){ return `<div class="form-field"><label>${label}</label><input value="${esc(catVal(k))}" placeholder="${esc(ph||'')}" oninput="catSet('${k}',this.value)"></div>`; }
+function catChk(k, label){ return `<label style="display:flex;gap:8px;align-items:center;font-size:13.5px;"><input type="checkbox" ${CAT[k]?'checked':''} onchange="catSet('${k}',this.checked)"> ${label}</label>`; }
+function catSummaryHtml(){
+  const plan = catPlan(), all = []; plan.groups.forEach(g => g.items.forEach(p => all.push(p)));
+  const noImg = all.filter(p => !p.hasImg);
+  return `<p style="font-size:13px;margin:6px 0;">মোট <b>${plan.total}</b>টি পণ্য · <b>${plan.groups.length}</b>টি ক্যাটাগরি · <b>${plan.pages.length}</b> পাতা · ছবি আছে <b>${all.length-noImg.length}</b>টির, নেই <b>${noImg.length}</b>টির</p>` +
+    (noImg.length ? `<details style="font-size:12.5px;margin-bottom:6px;"><summary style="cursor:pointer;color:var(--navy);">ছবি নেই এমন পণ্য দেখুন</summary><div style="margin-top:6px;color:var(--text-muted);">${noImg.slice(0,40).map(p => esc(p.name)).join('، ')}${noImg.length>40?' ...':''}</div></details>` : '');
+}
+function catRefresh(withPreview){
+  const el = document.getElementById('catSummary'); if(el) el.innerHTML = catSummaryHtml();
+  if(withPreview) catPrevSoon();
+}
+function renderCatalog(){
+  catLoad();
+  const cnt = catAllCats(), names = Object.keys(cnt).sort((a,b) => a.localeCompare(b,'bn')), per = Number(CAT.perPage)||12;
+  document.getElementById('pageContent').innerHTML = `
+    <div class="panel">
+      <div class="panel-head"><h3>পণ্য ক্যাটালগ</h3></div>
+      <p style="font-size:12.5px;color:var(--text-muted);">পণ্য তালিকা থেকে নিজে থেকে ক্যাটালগ বানায় — কভার, সূচিপত্র, তারপর ক্যাটাগরি ধরে পাতা। ক্রয়মূল্য কখনো যায় না। নিচে অপশন বেছে PDF, JPG বা WhatsApp-এ নিন।</p>
+      <h4 style="margin:8px 0 4px;">শিরোনাম ও তথ্য</h4>
+      <div class="form-grid">
+        ${catField('title','ক্যাটালগের নাম')}${catField('dateText','তারিখ/মাস (কভারে)')}${catField('tagline','ট্যাগলাইন')}
+      </div>
+      <h4 style="margin:12px 0 4px;">কী কী থাকবে</h4>
+      <div style="display:flex;flex-direction:column;gap:7px;">
+        ${catChk('showPrice','পণ্যের দাম দেখান')}${catChk('hideZero','স্টক নেই এমন পণ্য বাদ দিন')}${catChk('excludeHidden','"লুকানো" পণ্য বাদ দিন')}${catChk('cover','কভার পাতা')}${catChk('toc','সূচিপত্র')}
+      </div>
+      <div class="form-field" style="margin-top:12px;max-width:260px;"><label>প্রতি পাতায় পণ্য</label>
+        <select onchange="catSet('perPage',Number(this.value))" style="padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);">
+          <option value="12" ${per===12?'selected':''}>১২টি (বড় ছবি)</option><option value="16" ${per===16?'selected':''}>১৬টি</option><option value="20" ${per===20?'selected':''}>২০টি (সবচেয়ে বেশি)</option></select></div>
+      <h4 style="margin:12px 0 4px;">ক্যাটাগরি <span style="font-weight:500;font-size:12px;">(<a href="#" onclick="catAllCatsSet(true);return false;">সব</a> · <a href="#" onclick="catAllCatsSet(false);return false;">কোনোটাই না</a>)</span></h4>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px;">
+        ${names.map(n => `<label style="display:flex;gap:8px;align-items:center;font-size:13.5px;"><input type="checkbox" ${CAT.cats[n]===false?'':'checked'} onchange="catToggleCat('${esc(n).replace(/'/g,"\\'")}',this.checked)"> ${esc(n)} <span class="muted-cell">(${cnt[n]})</span></label>`).join('') || '<span class="muted-cell">কোনো পণ্য নেই</span>'}
+      </div>
+      <h4 style="margin:14px 0 4px;">ফুটার (নিচের অংশ)</h4>
+      <div class="form-grid">
+        ${catField('footerNote','বাঁ পাশের বড় লেখা')}${catField('footerSub','বাঁ পাশের ছোট লেখা (ওয়েবসাইট)')}${catField('phone','ফোন নম্বর')}${catField('address','ঠিকানা')}${catField('disclaimer','নিচের ছোট নোট')}
+      </div>
+      <button class="btn btn-outline btn-sm" style="margin-top:8px;" onclick="catFromSettings()">⟲ ট্যাগলাইন, ফোন, ওয়েবসাইট ও ঠিকানা সেটিংস থেকে আনুন</button>
+      <h4 style="margin:14px 0 4px;">পণ্যের ছবি</h4>
+      <p style="font-size:12.5px;color:var(--text-muted);">একসাথে অনেক ছবি আপলোড করুন। ছবির ফাইলের নাম পণ্যের নামের মতো (বা পণ্য আইডি, যেমন P001) হলে ছবি নিজে থেকে ঠিক পণ্যে বসবে। লিফলেটে দেওয়া ছবিও এখানে কাজ করে।</p>
+      <label class="btn btn-outline btn-sm" style="cursor:pointer;display:inline-block;">📷 অনেক ছবি আপলোড করুন<input type="file" accept="image/*" multiple class="hidden" onchange="catBulkImages(this)"></label>
+      <div id="catSummary" style="margin-top:8px;">${catSummaryHtml()}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 6px;">
+        <button class="btn btn-primary btn-sm" onclick="catDownloadPdf()">📄 PDF ডাউনলোড</button>
+        <button class="btn btn-outline btn-sm" onclick="catDownloadJpg()">🖼️ JPG ডাউনলোড</button>
+        <button class="btn btn-accent btn-sm" onclick="catShare()">📤 WhatsApp-এ শেয়ার (PDF)</button>
+      </div>
+      <p id="catBusy" style="font-size:13px;color:var(--navy);min-height:18px;"></p>
+      <h4 style="margin:10px 0 4px;">প্রিভিউ</h4>
+      <div id="catPager" style="display:flex;gap:10px;align-items:center;margin-bottom:8px;"></div>
+      <div id="catPreview"></div>
+    </div>`;
+  CAT_PREV = 0; catPrevSoon();
+}
+function catPrevSoon(){ clearTimeout(CAT_TIMER); CAT_TIMER = setTimeout(catRenderPreview, 300); }
+function catGo(d){ const n = catPlan().pages.length; CAT_PREV = Math.max(0, Math.min(n-1, CAT_PREV+d)); catRenderPreview(); }
+async function catRenderPreview(){
+  const box = document.getElementById('catPreview'), pager = document.getElementById('catPager'); if(!box) return;
+  const tok = ++CAT_TOK, plan = catPlan();
+  if(!plan.pages.length){ box.innerHTML = '<p class="muted-cell">কোনো পণ্য নেই — অপশন বদলে দেখুন।</p>'; pager.innerHTML = ''; return; }
+  CAT_PREV = Math.max(0, Math.min(plan.pages.length-1, CAT_PREV));
+  await catFonts(); const cv = document.createElement('canvas');
+  await catDrawPage(cv, plan.pages[CAT_PREV], plan); if(tok !== CAT_TOK) return;
+  cv.style.cssText = 'width:100%;max-width:560px;display:block;margin:0 auto;border-radius:12px;box-shadow:0 4px 18px rgba(18,38,63,.18);';
+  box.innerHTML = ''; box.appendChild(cv);
+  pager.innerHTML = `<button class="btn btn-outline btn-sm" onclick="catGo(-1)" ${CAT_PREV===0?'disabled':''}>◀</button><span style="font-size:13px;">পাতা <b>${CAT_PREV+1}</b> / ${plan.pages.length}</span><button class="btn btn-outline btn-sm" onclick="catGo(1)" ${CAT_PREV>=plan.pages.length-1?'disabled':''}>▶</button>`;
+}
+
+/* ============================================================
    STOCK VALUE CHECK — স্টক মূল্য যাচাই (ভাউচার/ক্রয় খাতার সাথে মিলিয়ে দেখার জন্য)
    ============================================================ */
 let SC_Q = '', SC_VOUCHER = '';
@@ -1455,7 +1730,7 @@ function renderStockCheck(){
    SERVER BACKUP — সার্ভারে আলাদা কপি (averamart_backups), ডেটা ব্যবহার, সাপ্তাহিক রিমাইন্ডার
    ============================================================ */
 const BK = 'averamart_backups';
-const BK_NAMES = ['products','orders','purchases','expenses','returns','shareholders','contributions','closings','leaflets','settings','users'];
+const BK_NAMES = ['products','orders','purchases','expenses','returns','shareholders','contributions','closings','leaflets','investments','settings','users'];
 let BK_TRIED = false, BK_STATE = {ok:null, tag:'', err:''};
 function bkStatusText(){
   if(BK_STATE.ok===true) return `✅ সর্বশেষ সার্ভার ব্যাকআপ: <b>${esc(BK_STATE.tag)}</b>`;
@@ -1527,7 +1802,7 @@ async function restoreServerBackup(tag){
     alert('✅ ফেরত আনা হয়েছে। সংখ্যাগুলো মিলিয়ে দেখুন।'); go('dashboard');
   }catch(e){ alert('ফেরত আনা যায়নি: ' + (e.message||e)); }
 }
-const USAGE_NAMES = {products:'পণ্য', orders:'অর্ডার', purchases:'ক্রয়', expenses:'খরচ/আয়', returns:'রিটার্ন', closings:'মাস ক্লোজিং'};
+const USAGE_NAMES = {products:'পণ্য', orders:'অর্ডার', purchases:'ক্রয়', expenses:'খরচ/আয়', returns:'রিটার্ন', closings:'মাস ক্লোজিং', investments:'বিনিয়োগ', leaflets:'লিফলেট'};
 function usageRows(){
   return Object.keys(USAGE_NAMES).map(n => { let b = 0; try{ b = new Blob([JSON.stringify(CACHE[n]||[])]).size; }catch(e){} return {n, label:USAGE_NAMES[n], kb: Math.round(b/1024), pct: Math.round(b/1048576*100), cnt:(CACHE[n]||[]).length}; });
 }
@@ -3230,6 +3505,85 @@ function saveContribution(shareholderId){
 /* ============================================================
    PROFIT & LOSS (admin only)
    ============================================================ */
+/* ============================================================
+   INVESTMENT & RETURN — মূলধন ও রিটার্ন (লাভ-ক্ষতি পেইজে)
+   হাতে লেখা বিনিয়োগ + স্টক/বকেয়া থেকে "আটকে থাকা টাকা" — দুই হিসাব পাশাপাশি
+   ============================================================ */
+let INV_EDIT = '';
+function invSum(pred){ return r2(CACHE.investments.filter(pred).reduce((t,x) => t + Number(x.amount||0), 0)); }
+function invPct(a, b){ return b>0 ? (a/b*100).toFixed(2) + '%' : '—'; }
+function investPanelHtml(m, d, carryEnd){
+  const before = invSum(x => mOf(x.date) < m), thisM = invSum(x => mOf(x.date)===m), capital = r2(before + thisM);
+  const custDue = r2(CACHE.orders.filter(o => o.status==='Delivered' && mOf(o.date) <= m).reduce((t,o) => t + orderDue(o), 0));
+  const supDue = r2(CACHE.purchases.filter(pu => mOf(pu.date) <= m).reduce((t,pu) => t + purchaseDue(pu), 0));
+  const stuck = r2(d.closeVal + custDue - supDue);
+  const buy = r2(CACHE.purchases.filter(pu => mOf(pu.date)===m).reduce((t,pu) => t + Number(pu.totalCost||0), 0));
+  const entries = CACHE.investments.filter(x => mOf(x.date)===m).slice().sort((a,b) => a.date < b.date ? 1 : -1);
+  const locked = isMonthLocked(m), ed = INV_EDIT ? CACHE.investments.find(x => x.id===INV_EDIT) : null;
+  const defDate = ed ? ed.date : (m===curMonth() ? '' : m + '-01');
+  const neg = v => v>=0 ? '' : 'color:#B3261E;';
+  return `
+    <div class="panel">
+      <h3>মূলধন ও রিটার্ন — ${monthLabel(m)}</h3>
+      <div class="grid grid-2" style="margin-bottom:12px;">
+        <div class="stat-card"><div class="label">এই মাসের রিটার্ন (হাতে লেখা মূলধনে)</div><div class="value" style="${neg(d.net)}">${invPct(d.net, capital)}</div><div class="sub">নিট প্রফিট ${money(d.net)} ÷ মূলধন ${money(capital)}</div></div>
+        <div class="stat-card"><div class="label">এই মাসের রিটার্ন (আটকে থাকা টাকায়)</div><div class="value" style="${neg(d.net)}">${invPct(d.net, stuck)}</div><div class="sub">নিট প্রফিট ${money(d.net)} ÷ আটকে থাকা ${money(stuck)}</div></div>
+      </div>
+      <h4 style="margin:10px 0 4px;">ক) হাতে লেখা বিনিয়োগ অনুযায়ী</h4>
+      <table>
+        <tr><td>আগের মাস পর্যন্ত মোট বিনিয়োগ (জের)</td><td class="cell-num">${money(before)}</td></tr>
+        <tr><td>+ এই মাসের নতুন বিনিয়োগ</td><td class="cell-num">${money(thisM)}</td></tr>
+        <tr><td><b>মোট মূলধন (মাস শেষে)</b></td><td class="cell-num"><b>${money(capital)}</b></td></tr>
+        <tr><td>এই মাসের নিট প্রফিট</td><td class="cell-num" style="${neg(d.net)}">${money(d.net)}</td></tr>
+        <tr><td>মোট জমা নিট প্রফিট (মাস শেষ পর্যন্ত)</td><td class="cell-num" style="${neg(carryEnd)}">${money(carryEnd)}</td></tr>
+        <tr><td><b>মোট রিটার্ন (জমা প্রফিট ÷ মোট মূলধন)</b></td><td class="cell-num"><b>${invPct(carryEnd, capital)}</b></td></tr>
+      </table>
+      <h4 style="margin:14px 0 4px;">খ) আটকে থাকা টাকা অনুযায়ী (আনুমানিক — ক্যাশ ধরা নেই)</h4>
+      <table>
+        <tr><td>এই মাসের মোট ক্রয় (ভাউচার ধরে)</td><td class="cell-num">${money(buy)}</td></tr>
+        <tr><td>মাস শেষের স্টক মূল্য (ক্রয়মূল্যে)</td><td class="cell-num">${money(d.closeVal)}</td></tr>
+        <tr><td>+ কাস্টমারের বকেয়া (এখনকার, এই মাস পর্যন্ত ডেলিভারড অর্ডারের)</td><td class="cell-num">${money(custDue)}</td></tr>
+        <tr><td>− সরবরাহকারীর বকেয়া (এখনকার, এই মাস পর্যন্ত ক্রয়ের)</td><td class="cell-num">− ${money(supDue)}</td></tr>
+      </table>
+      <div class="invoice-total-row"><span>ব্যবসায় আটকে থাকা টাকা</span><span>${money(stuck)}</span></div>
+      <h4 style="margin:16px 0 6px;">বিনিয়োগ এন্ট্রি — ${monthLabel(m)}</h4>
+      ${locked ? '<div class="flash warn">🔒 এই মাস লক করা — বিনিয়োগ যোগ বা বদলানো যাবে না।</div>' : `
+      <div class="form-grid">
+        ${dateField('inv_date', defDate)}
+        <div class="form-field"><label>বিনিয়োগের পরিমাণ (৳)</label><input id="inv_amount" type="number" step="any" value="${ed?ed.amount:''}" placeholder="যেমন: 50000"></div>
+        <div class="form-field"><label>নোট (ঐচ্ছিক)</label><input id="inv_note" value="${ed?esc(ed.note||''):''}" placeholder="যেমন: নিজের সঞ্চয় থেকে"></div>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px;">
+        <button class="btn btn-primary btn-sm" onclick="saveInvestment()">${ed?'সংশোধন সংরক্ষণ':'+ বিনিয়োগ যোগ করুন'}</button>
+        ${ed ? '<button class="btn btn-outline btn-sm" onclick="INV_EDIT=\'\';renderProfitLoss()">বাতিল</button>' : ''}
+      </div>`}
+      <div class="table-wrap" style="margin-top:10px;"><table><thead><tr><th>তারিখ</th><th>পরিমাণ</th><th>নোট</th><th>একশন</th></tr></thead><tbody>
+        ${entries.map(x => `<tr><td>${x.date}</td><td class="cell-num">${money(x.amount)}</td><td>${esc(x.note||'')}</td><td class="cell-center">${isDateLocked(x.date) ? '🔒' : `<button class="icon-btn" onclick="editInvestment('${x.id}')">✏️</button><button class="icon-btn danger" onclick="deleteInvestment('${x.id}')">🗑️</button>`}</td></tr>`).join('') || '<tr><td colspan="4" class="empty-state">এই মাসে কোনো নতুন বিনিয়োগ লেখা হয়নি</td></tr>'}
+      </tbody></table></div>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">"ক" অংশের মূলধন আপনার হাতে লেখা বিনিয়োগের যোগফল। "খ" অংশ স্টক ও বকেয়া থেকে আনুমানিক — সফটওয়্যার ক্যাশ বা ব্যাংকের টাকা ট্র্যাক করে না।</p>
+    </div>`;
+}
+function saveInvestment(){
+  if(!isAdmin()){ alert('শুধু অ্যাডমিন বিনিয়োগ লিখতে পারবেন'); return; }
+  const amount = Number(document.getElementById('inv_amount').value||0);
+  if(!(amount>0)){ alert('বিনিয়োগের পরিমাণ সঠিকভাবে দিন'); return; }
+  const date = pickedDate('inv_date'), note = document.getElementById('inv_note').value.trim();
+  const old = INV_EDIT ? CACHE.investments.find(x => x.id===INV_EDIT) : null;
+  if(!guardDates([date, old && old.date], old ? 'সংশোধন' : 'এন্ট্রি')) return;
+  const arr = CACHE.investments.slice();
+  if(old){ const i = arr.findIndex(x => x.id===old.id); arr[i] = stampEdit({...old, date, amount, note}); }
+  else arr.push({id: genId('INV-', arr), date, amount, note});
+  if(saveCollection('investments', arr)){ INV_EDIT = ''; VIEW_MONTH = mOf(date) || VIEW_MONTH; renderProfitLoss(); }
+}
+function editInvestment(id){ const x = CACHE.investments.find(v => v.id===id); if(!x || !guardDate(x.date, 'সংশোধন')) return; INV_EDIT = id; renderProfitLoss(); }
+function deleteInvestment(id){
+  const x = CACHE.investments.find(v => v.id===id); if(!x) return;
+  if(!isAdmin()){ alert('শুধু অ্যাডমিন মুছতে পারবেন'); return; }
+  if(!guardDate(x.date, 'মুছে ফেলা')) return;
+  if(!confirm('এই বিনিয়োগ এন্ট্রিটি মুছবেন?')) return;
+  saveCollection('investments', CACHE.investments.filter(v => v.id!==id)); renderProfitLoss();
+}
+
 function renderProfitLoss(){
   if(!monthsList().includes(VIEW_MONTH)) VIEW_MONTH = curMonth();
   const m = VIEW_MONTH, idx = moveIndex(), d = monthData(m, idx);
@@ -3262,6 +3616,7 @@ function renderProfitLoss(){
       <div class="invoice-total-row"><span>মাস শেষে মোট জমা নিট প্রফিট (পরের মাসে যাবে)</span><span>${money(carryEnd)}</span></div>
       <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">জের পরের মাসে নিজে থেকেই যোগ হয়। আগের মাসে পুরোনো তারিখে কোনো এন্ট্রি দিলে পরের মাসের জের নিজে থেকেই ঠিক হয়ে যায়।</p>
     </div>
+    ${investPanelHtml(m, d, carryEnd)}
   `;
 }
 
@@ -3485,7 +3840,7 @@ function downloadBackup(){
     exportedAt: new Date().toISOString(),
     products: CACHE.products, orders: CACHE.orders, purchases: CACHE.purchases,
     expenses: CACHE.expenses, returns: CACHE.returns, shareholders: CACHE.shareholders,
-    contributions: CACHE.contributions, closings: CACHE.closings, settings: CACHE.settings
+    contributions: CACHE.contributions, closings: CACHE.closings, investments: CACHE.investments, leaflets: CACHE.leaflets, settings: CACHE.settings
   };
   try{ localStorage.setItem('AM_lastDownload', String(Date.now())); }catch(e){}
   const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
@@ -3615,7 +3970,7 @@ function restoreBackup_(event){
   reader.onload = (e) => {
     try{
       const data = JSON.parse(e.target.result);
-      const labels = {products:'পণ্য', orders:'অর্ডার', purchases:'ক্রয়', expenses:'খরচ/আয়', returns:'রিটার্ন', shareholders:'শেয়ারহোল্ডার', contributions:'জমা', closings:'মাস ক্লোজিং'};
+      const labels = {products:'পণ্য', orders:'অর্ডার', purchases:'ক্রয়', expenses:'খরচ/আয়', returns:'রিটার্ন', shareholders:'শেয়ারহোল্ডার', contributions:'জমা', closings:'মাস ক্লোজিং', investments:'বিনিয়োগ', leaflets:'লিফলেট'};
       const keys = Object.keys(labels).filter(k => Array.isArray(data[k]));
       if(!keys.length) throw new Error('not a backup');
       const summary = keys.map(k => `${labels[k]}: ${data[k].length}টি`).join(', ');
@@ -3664,7 +4019,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৩.৬';
+const APP_VERSION = '৩.৮';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{
