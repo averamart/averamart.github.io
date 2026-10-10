@@ -1603,6 +1603,48 @@ async function catRenderPreview(){
    STOCK VALUE CHECK — স্টক মূল্য যাচাই (ভাউচার/ক্রয় খাতার সাথে মিলিয়ে দেখার জন্য)
    ============================================================ */
 let SC_Q = '', SC_VOUCHER = '';
+function dataHealth(){
+  const prods = CACHE.products, ids = new Set(prods.map(p => p.id));
+  const orphanP = CACHE.purchases.filter(pu => !ids.has(pu.productId));
+  const orphanO = CACHE.orders.filter(o => orderItems(o).some(it => !ids.has(it.productId)));
+  const seen = {}, dup = []; prods.forEach(p => { if(seen[p.id]) dup.push(p); else seen[p.id] = 1; });
+  const bad = prods.filter(p => ['stock','cost','retail','minStock'].some(k => p[k]!==undefined && (typeof p[k]!=='number' || !isFinite(p[k]))));
+  return {orphanP, orphanO, dup, bad};
+}
+function dataHealthHtml(){
+  const h = dataHealth(), n = h.orphanP.length + h.orphanO.length + h.dup.length + h.bad.length;
+  if(!n) return '<div class="flash">✅ ডেটায় কোনো গরমিল পাওয়া যায়নি (মুছে ফেলা পণ্যের এন্ট্রি, একই আইডি, ভুল ধরনের সংখ্যা — কিছুই নেই)।</div>';
+  const cost = r2(h.orphanP.reduce((t,pu) => t + Number(pu.totalCost||0), 0));
+  return `<div class="panel"><h3>ডেটা গরমিল — ঠিক করুন</h3>
+    <p style="font-size:12.5px;color:var(--text-muted);">Firebase থেকে সরাসরি পণ্য যোগ বা মুছলে এমন গরমিল হতে পারে। নিচেরগুলো ঠিক করলে হিসাব মিলবে।</p>
+    ${h.orphanP.length ? `<div class="flash warn"><b>${h.orphanP.length}টি ক্রয় এন্ট্রির পণ্য নেই</b> (মোট ${money(cost)}) — পণ্য মুছে ফেলা হয়েছে কিন্তু ক্রয় এন্ট্রি রয়ে গেছে, তাই ক্রয় খাতার মোট বেশি দেখায়।<br><span style="font-size:12px;">${h.orphanP.slice(0,8).map(pu => esc(pu.id)+' ('+esc(pu.productName||pu.productId)+', '+money(pu.totalCost)+')').join('، ')}${h.orphanP.length>8?' ...':''}</span><br><button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="fixOrphanPurchases()">🗑️ এই ক্রয় এন্ট্রিগুলো মুছুন</button></div>` : ''}
+    ${h.orphanO.length ? `<div class="flash warn"><b>${h.orphanO.length}টি অর্ডারে মুছে ফেলা পণ্য আছে:</b> ${h.orphanO.slice(0,10).map(o => esc(o.id)).join('، ')}${h.orphanO.length>10?' ...':''}<br><span style="font-size:12px;">এগুলো নিজে থেকে ঠিক করা যায় না — অর্ডারগুলো খুলে সংশোধন করুন।</span></div>` : ''}
+    ${h.dup.length ? `<div class="flash warn"><b>${h.dup.length}টি পণ্যের আইডি অন্য পণ্যের সাথে এক:</b> ${h.dup.slice(0,8).map(p => esc(p.id)+' ('+esc(p.name)+')').join('، ')}<br><button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="fixDupIds()">🔧 পরেরগুলোকে নতুন আইডি দিন</button></div>` : ''}
+    ${h.bad.length ? `<div class="flash warn"><b>${h.bad.length}টি পণ্যের স্টক/দাম সংখ্যা হিসেবে নেই (লেখা হিসেবে আছে):</b> ${h.bad.slice(0,8).map(p => esc(p.name)).join('، ')}${h.bad.length>8?' ...':''}<br><button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="fixBadNumbers()">🔧 সংখ্যা ঠিক করুন</button></div>` : ''}
+  </div>`;
+}
+function fixOrphanPurchases(){
+  if(!isAdmin()){ alert('শুধু অ্যাডমিন করতে পারবেন'); return; }
+  const ids = new Set(CACHE.products.map(p => p.id));
+  const bad = CACHE.purchases.filter(pu => !ids.has(pu.productId)), del = bad.filter(pu => !isDateLocked(pu.date)), locked = bad.length - del.length;
+  if(!del.length){ alert('এই ক্রয় এন্ট্রিগুলো লক করা মাসে আছে — আগে ক্লোজিং পেইজ থেকে মাসটি খুলুন।'); return; }
+  if(!confirm(`${del.length}টি ক্রয় এন্ট্রি (মোট ${money(r2(del.reduce((t,pu)=>t+Number(pu.totalCost||0),0)))}) মুছবেন?\\n\\nএই পণ্যগুলো আগেই মুছে ফেলা হয়েছে, তাই স্টকে কোনো পরিবর্তন হবে না।${locked?`\\n(${locked}টি লক করা মাসে আছে, সেগুলো থাকবে)`:''}`)) return;
+  const keep = CACHE.purchases.filter(pu => ids.has(pu.productId) || isDateLocked(pu.date));
+  if(saveCollection('purchases', keep)){ alert('✅ মুছে ফেলা হয়েছে'); renderStockCheck(); }
+}
+function fixBadNumbers(){
+  if(!isAdmin()){ alert('শুধু অ্যাডমিন করতে পারবেন'); return; }
+  const num = v => { const n = Number(String(v).replace(/[,\\s৳]/g,'')); return isFinite(n) ? n : 0; };
+  const products = CACHE.products.map(p => { const q = {...p}; ['stock','cost','retail','minStock'].forEach(k => { if(q[k]!==undefined && (typeof q[k]!=='number' || !isFinite(q[k]))) q[k] = num(q[k]); }); return q; });
+  if(saveCollection('products', products)){ alert('✅ সংখ্যা ঠিক হয়েছে'); renderStockCheck(); }
+}
+function fixDupIds(){
+  if(!isAdmin()){ alert('শুধু অ্যাডমিন করতে পারবেন'); return; }
+  if(!confirm('একই আইডির পরের পণ্যগুলো নতুন আইডি পাবে (প্রথমটির আইডি অপরিবর্তিত থাকবে)। এগিয়ে যাবেন?')) return;
+  const products = CACHE.products.map(p => ({...p})), seen = {};
+  products.forEach((p,i) => { if(seen[p.id]){ p.id = genId('P', products); } seen[p.id] = 1; });
+  if(saveCollection('products', products)){ alert('✅ আইডি ঠিক হয়েছে'); renderStockCheck(); }
+}
 function stockCheckData(){
   const lastBuy = {};
   CACHE.purchases.slice().sort((a,b)=> String(a.date).localeCompare(String(b.date))).forEach(pu => { if(pu.productId && Number(pu.qty)>0) lastBuy[pu.productId] = Number(pu.totalCost||0)/Number(pu.qty); });
@@ -1639,6 +1681,7 @@ function stockCheckData(){
     r.U = U; r.expected = r3(tracked + T.A); r.T = T;
     if(Math.abs(U) > 0.0005) mism.push(r);
   });
+  { const ids0 = new Set(CACHE.products.map(p => p.id)); B.orphan = CACHE.purchases.filter(pu => !ids0.has(pu.productId)).reduce((t,pu) => t + Number(pu.totalCost||0), 0); }
   Object.keys(B).forEach(k => B[k] = r2(B[k]));
   return {rows, A, B, mism, totCost: r2(rows.reduce((t,r)=>t+r.vCost,0)), totRetail: r2(rows.reduce((t,r)=>t+r.vRetail,0)), count: rows.filter(r=>r.st>0).length,
           buyTotal: r2(CACHE.purchases.reduce((t,pu)=>t+Number(pu.totalCost||0),0))};
@@ -1695,7 +1738,8 @@ function renderStockCheck(){
       <h3>ক্রয় খাতা থেকে স্টক মূল্য — ধাপে ধাপে হিসাব</h3>
       <p style="font-size:12.5px;color:var(--text-muted);">ক্রয় খাতার মোট খরচ থেকে শুরু করে কোন কারণে কত টাকা বাড়ছে/কমছে, নিচে দেখুন। শেষ সংখ্যা ড্যাশবোর্ডের স্টক মূল্যের সমান।</p>
       <table>
-        <tr><td>ক্রয় খাতার মোট খরচ (ভাউচারের টাকা)</td><td class="cell-num">${money(d.B.A)}</td></tr>
+        <tr><td>ক্রয় খাতার মোট খরচ (ভাউচারের টাকা)</td><td class="cell-num">${money(r2(d.B.A + d.B.orphan))}</td></tr>
+        ${d.B.orphan>0 ? `<tr><td>− যেসব পণ্য মুছে ফেলা হয়েছে (ক্রয় এন্ট্রি আছে, পণ্য নেই)</td><td class="cell-num">− ${money(d.B.orphan)}</td></tr>` : ''}
         <tr><td>− যা বিক্রি হয়ে গেছে (ক্রয়দামে, রিটার্ন বাদে)</td><td class="cell-num">− ${money(d.B.sold)}</td></tr>
         <tr><td>± পণ্য তালিকার ক্রয়মূল্য আর ভাউচারের দামের পার্থক্য</td><td class="cell-num">${d.B.diff>=0?'+ ':'− '}${money(Math.abs(d.B.diff))}</td></tr>
         <tr><td>+ পণ্য তালিকা/এক্সেল থেকে হাতে বসানো স্টক (সমন্বয়, প্রারম্ভিক স্টক)</td><td class="cell-num">${d.B.logged>=0?'+ ':'− '}${money(Math.abs(d.B.logged))}</td></tr>
@@ -1705,6 +1749,7 @@ function renderStockCheck(){
       <div class="invoice-total-row"><span>= মোট স্টক মূল্য (ক্রয়মূল্যে)</span><span>${money(d.totCost)}</span></div>
       <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">যে লাইনে সবচেয়ে বড় সংখ্যা সেটাই পার্থক্যের মূল কারণ।</p>
     </div>
+    ${dataHealthHtml()}
     ${(() => { const pl = avgCostPlan(); return pl.list.length ? `<div class="panel"><h3>ক্রয়মূল্য ভাউচারের সাথে মেলান</h3>
       <p style="font-size:12.5px;color:var(--text-muted);">${pl.list.length}টি পণ্যের ক্রয়মূল্য ক্রয় খাতার ভাউচার গড়ের (মোট খরচ ÷ মোট পরিমাণ) সাথে মিলছে না। ঠিক করলে স্টক মূল্য <b>${money(pl.valBefore)}</b> থেকে <b>${money(pl.valAfter)}</b> হবে। এরপর থেকে প্রতিটি ক্রয় এন্ট্রিতে এই দাম নিজে থেকেই ঠিক হবে।</p>
       <div class="table-wrap"><table><thead><tr><th>পণ্য</th><th>এখনকার ক্রয়মূল্য</th><th>ভাউচার গড়</th></tr></thead><tbody>${pl.list.slice(0,25).map(x=>`<tr><td>${esc(x.p.name)}</td><td class="cell-num">${money(x.oldCost)}</td><td class="cell-num"><b>${money(x.newCost)}</b></td></tr>`).join('')}</tbody></table></div>
@@ -4019,7 +4064,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৩.৮';
+const APP_VERSION = '৩.৯';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{
