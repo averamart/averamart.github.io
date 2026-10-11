@@ -309,3 +309,10 @@ select:disabled{opacity:.55;cursor:not-allowed;}
 .export-btns button:active{background:var(--bg);}
 .export-btns.hidden{display:none;}
 @media(max-width:560px){ .ex-l{display:none;} .export-btns button{padding:7px 12px;font-size:17px;} }
+
+/* ===== suggestion dropdowns (customers, suppliers, products) ===== */
+.sg-box{position:absolute;left:0;right:0;top:100%;z-index:40;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 22px rgba(18,38,63,.18);max-height:260px;overflow:auto;margin-top:2px;}
+.sg-box.hidden{display:none;}
+.sg-item{padding:9px 12px;border-bottom:1px solid #EEF1F5;font-size:14px;cursor:pointer;line-height:1.45;}
+.sg-item:last-child{border-bottom:none;}
+.sg-item:hover,.sg-item:active{background:#EAF2FA;}

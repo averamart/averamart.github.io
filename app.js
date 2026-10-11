@@ -319,6 +319,71 @@ function fmtQty(qty, p){
   if(info && info.pack && q > 1 && Math.abs(q - Math.round(q)) > 0.0001) return `${r3(q)} ${unit} (${r3(q*info.factor)} ${info.label})`;
   return `${r3(q)} ${unit}`;
 }
+const kk = x => catKey(bnToEn(x));
+function prodMatches(q, limit, includeHidden){
+  const toks = String(q||'').trim().split(/\s+/).map(kk).filter(Boolean); if(!toks.length) return [];
+  const res = [];
+  CACHE.products.forEach(p => {
+    if(!includeHidden && p.hidden) return;
+    const nm = kk(p.name), hay = nm + '|' + kk(p.id) + '|' + kk(p.category||'');
+    if(toks.every(t => hay.includes(t))) res.push({p, r: nm.startsWith(toks[0]) ? 0 : (nm.includes(toks[0]) ? 1 : 2)});
+  });
+  res.sort((a,b) => a.r-b.r || String(a.p.name).localeCompare(String(b.p.name),'bn'));
+  return res.slice(0, limit||10).map(x => x.p);
+}
+function custList(){
+  const seen = {}, out = [];
+  CACHE.orders.slice().reverse().forEach(o => {
+    if(!o.customerName) return; const k = kk(o.customerName) + '|' + kk(o.phone||''); if(seen[k]) return; seen[k] = 1;
+    out.push({name:o.customerName, phone:o.phone||'', address:o.address||'', pl:o.priceList||'retail'});
+  });
+  return out;
+}
+function custFind(q){
+  const all = custList(), t = String(q||'').trim(); if(!t) return all.slice(0,6);
+  const toks = t.split(/\s+/).map(kk).filter(Boolean);
+  return all.filter(c => { const hay = kk(c.name) + '|' + kk(c.phone) + '|' + kk(c.address); return toks.every(x => hay.includes(x)); }).slice(0,8);
+}
+function supplierFind(q){
+  const seen = {}, all = []; CACHE.purchases.slice().reverse().forEach(pu => { const n = (pu.supplier||'').trim(); if(!n || seen[kk(n)]) return; seen[kk(n)] = 1; all.push(n); });
+  const toks = String(q||'').trim().split(/\s+/).map(kk).filter(Boolean);
+  return (toks.length ? all.filter(n => toks.every(t => kk(n).includes(t))) : all).slice(0,8);
+}
+const SG_ITEMS = {};
+function sgAttach(id, find, label, pick){
+  const inp = document.getElementById(id); if(!inp) return;
+  const wrap = inp.parentElement; wrap.style.position = 'relative';
+  const box = document.createElement('div'); box.className = 'sg-box hidden'; wrap.appendChild(box);
+  const show = () => {
+    const items = find(inp.value); SG_ITEMS[id] = items;
+    if(!items.length){ box.classList.add('hidden'); return; }
+    box.innerHTML = items.map((it,i) => `<div class="sg-item" data-i="${i}">${label(it)}</div>`).join(''); box.classList.remove('hidden');
+  };
+  inp.addEventListener('input', show); inp.addEventListener('focus', show);
+  inp.addEventListener('blur', () => setTimeout(() => box.classList.add('hidden'), 220));
+  box.addEventListener('pointerdown', e => {
+    const d = e.target.closest('.sg-item'); if(!d) return; e.preventDefault();
+    const it = (SG_ITEMS[id]||[])[Number(d.dataset.i)]; box.classList.add('hidden'); if(it!==undefined) pick(it);
+  });
+}
+function custLabel(c){ return `<b>${esc(c.name)}</b> <span class="muted-cell">${esc(c.phone)}</span>${c.address ? `<br><span class="muted-cell" style="font-size:11.5px;">${esc(c.address)}</span>` : ''}`; }
+function custPick(c){
+  const set = (id,v) => { const e = document.getElementById(id); if(e) e.value = v; };
+  set('o_name', c.name); set('o_phone', c.phone); set('o_addr', c.address);
+  if(c.pl && c.pl!==ORDER_PL && !ORDER_CART.length){ ORDER_PL = c.pl; const e = document.getElementById('o_pl'); if(e) e.value = c.pl; }
+}
+function custSuggestInit(){ ['o_name','o_phone','o_addr'].forEach(id => sgAttach(id, custFind, custLabel, custPick)); }
+function purchaseSuggestInit(){
+  sgAttach('pu_supplier', supplierFind, n => `<b>${esc(n)}</b>`, n => { const e = document.getElementById('pu_supplier'); if(e) e.value = n; });
+  sgAttach('pu_pname', q => prodMatches(q, 10, true), p => `<b>${esc(p.name)}</b> <span class="muted-cell">${esc(p.unit||'কেজি')} · স্টক ${fmtStock(p.stock, p)}</span>`, p => { const e = document.getElementById('pu_pname'); if(e){ e.value = p.name; onPurchaseNameType(); } });
+}
+const PRICE_LISTS = {retail:'খুচরা', wholesale:'পাইকারি', corporate:'কর্পোরেট'};
+function unitListPrice(p, list){ const f = list==='wholesale' ? 'wholesale' : list==='corporate' ? 'corporate' : 'retail', v = Number(p[f]); return (f!=='retail' && v>0) ? v : Number(p.retail||0); }
+function packListPrice(p, list){ const n = Number(p.priceBasis)||1; return Math.round(unitListPrice(p, list)*n*100)/100; }
+function listPricesNote(p){
+  const w = Number(p.wholesale)>0, c = Number(p.corporate)>0; if(!w && !c) return '';
+  return `<br><span class="muted-cell" style="font-size:11px;">${w?'পাইকারি '+money(packListPrice(p,'wholesale')):''}${w&&c?' · ':''}${c?'কর্পোরেট '+money(packListPrice(p,'corporate')):''}</span>`;
+}
 function lineGross(it){ return Math.round(Number(it.qty)*Number(it.unitPrice)*100)/100; }
 function lineDisc(it){
   const g = lineGross(it);
@@ -326,7 +391,13 @@ function lineDisc(it){
   if(it.discType==='amt') return Math.min(g, Math.round((Number(it.discVal)||0)*100)/100);
   return Math.min(g, Math.round((Number(it.lineDiscount)||0)*100)/100);
 }
-function lineAmt(it){ return Math.round((lineGross(it) - lineDisc(it))*100)/100; }
+function lineSur(it){
+  const g = lineGross(it);
+  if(it.surType==='pct') return Math.round(g*(Number(it.surVal)||0))/100;
+  if(it.surType==='amt') return Math.round((Number(it.surVal)||0)*100)/100;
+  return Math.round((Number(it.lineSurcharge)||0)*100)/100;
+}
+function lineAmt(it){ return Math.round((lineGross(it) - lineDisc(it) + lineSur(it))*100)/100; }
 // what the customer sees: exactly the unit the seller picked (e.g. "10 গ্রাম", "2 কেজি")
 function fmtItem(it, p){ return (it.dq!=null && it.du) ? `${it.dq} ${it.du}` : fmtQty(it.qty, p); }
 function syncDisp(it, p){
@@ -410,7 +481,7 @@ const NAV_ITEMS = [
   {key:'expenses', label:'খরচ খাতা', icon:'💸', roles:['admin','manager']},
   {key:'dues', label:'বকেয়া হিসাব', icon:'📒', roles:['admin','manager']},
   {key:'returns', label:'রিটার্ন ও সমন্বয়', icon:'🔄', roles:['admin','manager']},
-  {key:'discounts', label:'ডিসকাউন্ট রেজিস্টার', icon:'🏷️', roles:['admin','manager']},
+  {key:'discounts', label:'ছাড় ও বাড়তি রেজিস্টার', icon:'🏷️', roles:['admin','manager']},
   {key:'inventory', label:'ইনভেন্টরি রিপোর্ট', icon:'📋', roles:['admin','manager']},
   {key:'profitloss', label:'লাভ-ক্ষতি', icon:'📊', roles:['admin']},
   {key:'closing', label:'মাস ক্লোজিং ও লক', icon:'🔒', roles:['admin']},
@@ -1184,7 +1255,7 @@ function exModel(){
     m.tables.push({name:'লিফলেটের পণ্য — ' + (LF.title||''), head:['ক্রম','পণ্য','অফারের ধরন','দেখানো দাম (৳)'], rows: LF.items.filter(it => lfProd(it.pid)).map((it,i) => { const p = lfProd(it.pid); return [String(i+1), p.name, tl[it.type]||'', String(lfPriceInfo(it,p).now)]; })});
   }
   if(currentPage==='catalog' && typeof CAT!=='undefined' && CAT){
-    const rows = []; catGroups().forEach(g => g.items.forEach(p => rows.push([g.name, p.name, lfUnitLabel(p), CAT.showPrice ? String(lfBase(p)) : '', Number(p.stock)>0 ? 'আছে' : 'নেই'])));
+    const rows = []; catGroups().forEach(g => g.items.forEach(p => rows.push([g.name, p.name, lfUnitLabel(p), CAT.showPrice ? String(packListPrice(p, CAT.priceList)) : '', Number(p.stock)>0 ? 'আছে' : 'নেই'])));
     if(rows.length) m.tables.push({name:'ক্যাটালগের পণ্য তালিকা', head:['ক্যাটাগরি','পণ্য','একক','দাম (৳)','স্টক'], rows});
   }
   return (m.summary.length || m.tables.length) ? m : null;
@@ -1339,7 +1410,7 @@ const CAT_IMG = new Map(), CAT_TOC_ROWS = 24;
 function bnYear(y){ return Number(y).toLocaleString('bn-BD', {useGrouping:false}); }
 function catDefaults(){
   const st = CACHE.settings, cm = curMonth().split('-');
-  return {title:'পণ্য ক্যাটালগ', dateText: `${BN_MONTHS[Number(cm[1])-1]} ${bnYear(cm[0])}`, perPage:12, showPrice:true, hideZero:true, excludeHidden:true, cover:true, toc:true, cats:{},
+  return {title:'পণ্য ক্যাটালগ', dateText: `${BN_MONTHS[Number(cm[1])-1]} ${bnYear(cm[0])}`, perPage:12, showPrice:true, priceList:'retail', hideZero:true, excludeHidden:true, cover:true, toc:true, cats:{},
     tagline: st.tagline||'', footerNote:'ফ্রি হোম ডেলিভারি', footerSub: st.website||'', phone: st.phone||'', address: st.businessAddress||'', disclaimer:'দাম পরিবর্তনযোগ্য, স্টক থাকা সাপেক্ষে'};
 }
 function catLoad(){
@@ -1427,7 +1498,7 @@ function catCard(c, p, x, y, w, h, s, img){
   const nf = Math.max(14, Math.round(24*s)), lh = Math.round(28*s), ny = zy+zh+Math.round(28*s);
   c.fillStyle = '#12263F'; c.font = lfF(700, nf); c.textAlign = 'left';
   lfWrap(c, p.name, w-24*s, 2).forEach((ln,i) => c.fillText(ln, x+12*s, ny+i*lh));
-  if(CAT.showPrice){ c.font = lfF(800, Math.max(22, Math.round(42*s))); c.fillStyle = '#17539F'; c.fillText(bnTaka(lfBase(p)), x+12*s, y+h-Math.round(14*s)); }
+  if(CAT.showPrice){ c.font = lfF(800, Math.max(22, Math.round(42*s))); c.fillStyle = '#17539F'; c.fillText(bnTaka(packListPrice(p, CAT.priceList)), x+12*s, y+h-Math.round(14*s)); }
 }
 async function catDrawPage(canvas, pg, plan){
   const c = canvas.getContext('2d'); canvas.width = LF_W; canvas.height = LF_H;
@@ -1557,6 +1628,8 @@ function renderCatalog(){
       <div style="display:flex;flex-direction:column;gap:7px;">
         ${catChk('showPrice','পণ্যের দাম দেখান')}${catChk('hideZero','স্টক নেই এমন পণ্য বাদ দিন')}${catChk('excludeHidden','"লুকানো" পণ্য বাদ দিন')}${catChk('cover','কভার পাতা')}${catChk('toc','সূচিপত্র')}
       </div>
+      <div class="form-field" style="margin-top:12px;max-width:260px;"><label>কোন মূল্য তালিকার দাম দেখাবে</label>
+        <select onchange="catSet('priceList',this.value)" style="padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);">${Object.keys(PRICE_LISTS).map(k => `<option value="${k}" ${(CAT.priceList||'retail')===k?'selected':''}>${PRICE_LISTS[k]}</option>`).join('')}</select></div>
       <div class="form-field" style="margin-top:12px;max-width:260px;"><label>প্রতি পাতায় পণ্য</label>
         <select onchange="catSet('perPage',Number(this.value))" style="padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);">
           <option value="12" ${per===12?'selected':''}>১২টি (বড় ছবি)</option><option value="16" ${per===16?'selected':''}>১৬টি</option><option value="20" ${per===20?'selected':''}>২০টি (সবচেয়ে বেশি)</option></select></div>
@@ -1968,7 +2041,7 @@ function productRowsHtml(){
       <td>${esc(p.category)}</td>
       <td>${esc(p.unit||'কেজি')}</td>
       ${admin ? `<td class="cell-num">${money(packPrice(p,'cost'))}${fmtBasis(p)?`<br><span class="muted-cell" style="font-size:11.5px;">/ ${fmtBasis(p)}</span>`:''}</td>` : ''}
-      <td class="cell-num">${money(packPrice(p,'retail'))}${fmtBasis(p)?`<br><span class="muted-cell" style="font-size:11.5px;">/ ${fmtBasis(p)}</span>`:`<br><span class="muted-cell" style="font-size:11.5px;">/ ১ ${esc(p.unit||'কেজি')}</span>`}</td>
+      <td class="cell-num">${money(packPrice(p,'retail'))}${fmtBasis(p)?`<br><span class="muted-cell" style="font-size:11.5px;">/ ${fmtBasis(p)}</span>`:`<br><span class="muted-cell" style="font-size:11.5px;">/ ১ ${esc(p.unit||'কেজি')}</span>`}${listPricesNote(p)}</td>
       <td>${fmtStock(p.stock, p)} ${Number(p.stock)<=Number(p.minStock) && !p.hidden ? '<span class="badge badge-low">লো স্টক</span>' : ''}</td>
       <td class="cell-center">
         <button class="icon-btn" title="${p.hidden?'আবার চালু করুন':'লুকিয়ে রাখুন'}" onclick="toggleProductHidden('${p.id}')">${p.hidden?'🙈':'👁️'}</button>
@@ -2022,19 +2095,20 @@ function renderProducts(){
 }
 
 const XL = {id:'আইডি', name:'পণ্যের নাম', cat:'ক্যাটাগরি', unit:'একক (কেজি/গ্রাম/লিটার/পিস)', cost:'ক্রয়মূল্য', retail:'বিক্রয়মূল্য', stock:'স্টক', min:'ন্যূনতম স্টক সতর্কতা', active:'সক্রিয় (হ্যাঁ/না)'};
-const XL_COLS = [XL.id, XL.name, XL.cat, XL.unit, XL.cost, XL.retail, XL.stock, XL.min, XL.active];
+XL.wholesale = 'পাইকারি মূল্য'; XL.corporate = 'কর্পোরেট মূল্য';
+const XL_COLS = [XL.id, XL.name, XL.cat, XL.unit, XL.cost, XL.retail, XL.stock, XL.min, XL.active, XL.wholesale, XL.corporate];
 function writeProductSheet(rows, filename){
   const ws = XLSX.utils.aoa_to_sheet([XL_COLS, ...rows]);
-  ws['!cols'] = [{wch:8},{wch:28},{wch:16},{wch:22},{wch:12},{wch:12},{wch:10},{wch:16},{wch:16}];
+  ws['!cols'] = [{wch:8},{wch:28},{wch:16},{wch:22},{wch:12},{wch:12},{wch:10},{wch:16},{wch:16},{wch:14},{wch:14}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'পণ্য তালিকা');
   XLSX.writeFile(wb, filename);
 }
 function downloadProductDemoExcel(){
-  writeProductSheet([['','মিনিকেট চাল','খাদ্যশস্য','কেজি',68,78,200,20,'হ্যাঁ']], 'avera-mart-product-demo.xlsx');
+  writeProductSheet([['','মিনিকেট চাল','খাদ্যশস্য','কেজি',68,78,200,20,'হ্যাঁ',75,72]], 'avera-mart-product-demo.xlsx');
 }
 function exportProductsExcel(){
-  const rows = CACHE.products.map(p => [p.id, p.name, p.category, p.unit||'কেজি', p.cost, p.retail, p.stock, p.minStock, p.hidden?'না':'হ্যাঁ']);
+  const rows = CACHE.products.map(p => [p.id, p.name, p.category, p.unit||'কেজি', p.cost, p.retail, p.stock, p.minStock, p.hidden?'না':'হ্যাঁ', p.wholesale||'', p.corporate||'']);
   writeProductSheet(rows, `avera-mart-products-${todayStr()}.xlsx`);
 }
 function cellVal(row, key){ const v = row[key]; return (v===undefined || v===null || String(v).trim()==='') ? null : v; }
@@ -2071,6 +2145,7 @@ function handleExcelUpload(event){
         const unit = cellVal(row, XL.unit) ?? cellVal(row, 'একক');
         const cost = cellVal(row, XL.cost), retail = cellVal(row, XL.retail) ?? cellVal(row, 'খুচরা মূল্য');
         const stock = cellVal(row, XL.stock), min = cellVal(row, XL.min), active = cellVal(row, XL.active);
+        const whl = cellVal(row, XL.wholesale), cor = cellVal(row, XL.corporate);
         if(idx>-1){
           const old = products[idx], ch = {};
           if(name) ch.name = name;
@@ -2078,6 +2153,8 @@ function handleExcelUpload(event){
           if(unit) ch.unit = String(unit).trim();
           if(cost!==null) ch.cost = Number(cost);
           if(retail!==null) ch.retail = Number(retail);
+          if(whl!==null) ch.wholesale = Number(whl)||0;
+          if(cor!==null) ch.corporate = Number(cor)||0;
           if(min!==null) ch.minStock = Number(min);
           if(updateStock && stock!==null){ ch.stock = Number(stock); if(r3(ch.stock)!==r3(old.stock)) ch.adj = (old.adj||[]).concat([{d: todayStr(), q: r3(ch.stock - Number(old.stock||0))}]); }
           if(active!==null) ch.hidden = isNo(active);
@@ -2090,7 +2167,7 @@ function handleExcelUpload(event){
             id: newId, name,
             category: cat ? String(cat).trim() : 'অন্যান্য',
             unit: unit ? String(unit).trim() : 'কেজি',
-            cost: Number(cost||0), retail: Number(retail||0),
+            cost: Number(cost||0), retail: Number(retail||0), wholesale: Number(whl||0), corporate: Number(cor||0),
             stock: Number(stock||0), minStock: Number(min ?? 5),
             hidden: active!==null ? isNo(active) : false,
             createdAt: todayStr(),
@@ -2158,6 +2235,8 @@ function openProductForm(id){
         </div>
         ${isAdmin?`<div class="form-field"><label>ক্রয়মূল্য (৳) — <span class="basis-lbl"></span></label><input id="f_cost" type="number" step="any" value="${p?packPrice(p,'cost'):''}" oninput="updatePriceHint()"><span class="muted-cell" style="font-size:11.5px;">ক্রয় এন্ট্রি থাকলে এই দাম প্রতিবার ভাউচার গড় অনুযায়ী নিজে থেকে বদলায়।</span></div>`:''}
         <div class="form-field"><label>বিক্রয়মূল্য (৳) — <span class="basis-lbl"></span></label><input id="f_retail" type="number" step="any" value="${p?packPrice(p,'retail'):''}" oninput="updatePriceHint()"></div>
+        <div class="form-field"><label>পাইকারি মূল্য (৳) — ঐচ্ছিক, <span class="basis-lbl"></span></label><input id="f_wholesale" type="number" step="any" value="${p && Number(p.wholesale)>0 ? packListPrice(p,'wholesale') : ''}" placeholder="ফাঁকা = খুচরা দাম"></div>
+        <div class="form-field"><label>কর্পোরেট মূল্য (৳) — ঐচ্ছিক, <span class="basis-lbl"></span></label><input id="f_corporate" type="number" step="any" value="${p && Number(p.corporate)>0 ? packListPrice(p,'corporate') : ''}" placeholder="ফাঁকা = খুচরা দাম"></div>
         <div class="form-field" style="grid-column:1/-1;"><div id="f_pricehint" class="flash" style="margin:0;"></div></div>
         <div class="form-field"><label>বর্তমান স্টক (এককে)</label><input id="f_stock" type="number" value="${p?p.stock:0}"></div>
         <div class="form-field"><label>ন্যূনতম স্টক সতর্কতা</label><input id="f_min" type="number" value="${p?p.minStock:5}"></div>
@@ -2193,6 +2272,8 @@ function saveProduct(id){
     priceBasis: basis,
     packSize: parsePackUnit(document.getElementById('f_unit').value.trim()) ? 0 : (products.find(p=>p.id===id)?.packSize || 0),
     retail: per(Number(document.getElementById('f_retail').value||0)),
+    wholesale: (() => { const v = Number(document.getElementById('f_wholesale').value||0); return v>0 ? per(v) : 0; })(),
+    corporate: (() => { const v = Number(document.getElementById('f_corporate').value||0); return v>0 ? per(v) : 0; })(),
     stock: Number(document.getElementById('f_stock').value||0),
     minStock: Number(document.getElementById('f_min').value||0),
     hidden: !document.getElementById('f_active').checked
@@ -2252,7 +2333,7 @@ function renderOrders(){
   let rows = orders.slice().reverse().map(o => `
     <tr>
       <td>${o.id} ${editedBadge(o)}</td><td>${o.date}</td>
-      <td>${esc(o.customerName)}<br><span class="muted-cell">${esc(o.phone)}</span></td>
+      <td>${esc(o.customerName)}${o.priceList && o.priceList!=='retail' ? ' <span class="badge" style="background:#E9E4FA;color:#4B2FA8;">'+(PRICE_LISTS[o.priceList]||'')+'</span>' : ''}<br><span class="muted-cell">${esc(o.phone)}</span></td>
       <td>${itemsSummary(o)}</td>
       ${canSeeMoney ? `<td class="cell-num">${money(o.total)}</td>` : ''}
       <td class="cell-center">
@@ -2312,6 +2393,7 @@ function updateOrderStatus(id, newStatus){
 }
 
 /* ---- Order form: multi-product cart with a searchable product picker ---- */
+let ORDER_PL = 'retail';
 let ORDER_CART = [];   // [{productId, qty, unitPrice, standardPrice}]
 
 let ORDER_FROM = 'orders', ORDER_EDIT_ID = '';
@@ -2326,6 +2408,7 @@ function openOrderForm(id, from){
   ORDER_FROM = from || 'orders'; ORDER_EDIT_ID = id || '';
   const orders = CACHE.orders;
   const o = id ? orders.find(x=>x.id===id) : null;
+  ORDER_PL = (o && o.priceList) || 'retail';
   ORDER_CART = o ? orderItems(o).map(it=>{
     const p = CACHE.products.find(x=>x.id===it.productId);
     const m = unitOptions(p).find(o=>o.label===it.du);
@@ -2341,6 +2424,7 @@ function openOrderForm(id, from){
         <div class="form-field"><label>কাস্টমার নাম</label><input id="o_name" value="${o?esc(o.customerName):''}"></div>
         <div class="form-field"><label>মোবাইল নম্বর</label><input id="o_phone" value="${o?esc(o.phone):''}"></div>
         <div class="form-field span-2"><label>ডেলিভারি ঠিকানা</label><input id="o_addr" value="${o?esc(o.address):''}"></div>
+        <div class="form-field"><label>মূল্য তালিকা (ক্রেতার ধরন)</label><select id="o_pl" onchange="onPriceListChange(this.value)" style="padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);">${Object.keys(PRICE_LISTS).map(k => `<option value="${k}" ${ORDER_PL===k?'selected':''}>${PRICE_LISTS[k]}</option>`).join('')}</select></div>
         <div class="form-field"><label>ডেলিভারি চার্জ (৳)</label><input id="o_delivery" type="number" value="${o?o.deliveryCharge:0}" oninput="renderCart()"></div>
         <div class="form-field"><label>ছাড় / ডিসকাউন্ট (৳)</label><input id="o_discount" type="number" value="${o?(o.discount||0):0}" oninput="renderCart()"></div>
         <div class="form-field"><label>অর্ডার সোর্স</label>
@@ -2380,13 +2464,14 @@ function openOrderForm(id, from){
     </div>`;
   openForm(html);
   renderCart();
+  custSuggestInit();
 }
 
 function renderProductSearch(query){
   const box = document.getElementById('searchResults');
   const q = query.trim().toLowerCase();
   if(!q){ box.innerHTML=''; box.classList.remove('open'); return; }
-  const matches = CACHE.products.filter(p => !p.hidden && p.name.toLowerCase().includes(q)).slice(0,8);
+  const matches = prodMatches(query, 10, false);
   if(!matches.length){
     box.innerHTML = `<div class="search-empty">কোনো পণ্য পাওয়া যায়নি</div>`;
     box.classList.add('open');
@@ -2396,7 +2481,7 @@ function renderProductSearch(query){
     <div class="search-result-item" onclick="addToCart('${p.id}')" style="flex-direction:column;align-items:flex-start;gap:2px;">
       <div style="display:flex;justify-content:space-between;width:100%;">
         <span>${esc(p.name)}</span>
-        <span class="muted-cell">স্টক: ${fmtStock(p.stock, p)} · ${money(p.retail)}/${esc(p.unit||'কেজি')}</span>
+        <span class="muted-cell">স্টক: ${fmtStock(p.stock, p)} · ${money(unitListPrice(p, ORDER_PL))}/${esc(p.unit||'কেজি')}</span>
       </div>
       ${p.priceTiers ? `<span class="muted-cell" style="font-size:11.5px;">${esc(p.priceTiers)}</span>` : ''}
     </div>`).join('');
@@ -2408,7 +2493,7 @@ function addToCart(productId){
   if(!p) return;
   const existing = ORDER_CART.find(it=>it.productId===productId);
   if(existing){ existing.qty = Number(existing.qty) + 1; }
-  else { ORDER_CART.push({productId, qty:1, unitPrice: p.retail, standardPrice: p.retail, discType:'amt', discVal:0}); }
+  else { const lp = unitListPrice(p, ORDER_PL); ORDER_CART.push({productId, qty:1, unitPrice: lp, standardPrice: lp, discType:'amt', discVal:0, surType:'amt', surVal:0}); }
   document.getElementById('o_search').value = '';
   document.getElementById('searchResults').innerHTML = '';
   document.getElementById('searchResults').classList.remove('open');
@@ -2456,6 +2541,19 @@ function updateCartDisc(productId, key, val){
   else { it.discType = it.discType || 'amt'; it.discVal = Math.max(0, Number(val)||0); }
   renderCart();
 }
+function onPriceListChange(v){
+  const old = ORDER_PL;
+  if(ORDER_CART.length && !confirm('কার্টের সব পণ্যের দাম "' + PRICE_LISTS[v] + '" মূল্য তালিকা অনুযায়ী বদলাবে (এই পণ্যে ছাড়ের ঘর অপরিবর্তিত থাকবে)। এগিয়ে যাবেন?')){ const el = document.getElementById('o_pl'); if(el) el.value = old; return; }
+  ORDER_PL = v;
+  ORDER_CART.forEach(it => { const p = CACHE.products.find(x => x.id===it.productId); if(!p) return; const lp = unitListPrice(p, v); it.unitPrice = lp; it.standardPrice = lp; });
+  renderCart();
+}
+function updateCartSur(productId, key, val){
+  const it = ORDER_CART.find(x=>x.productId===productId); if(!it) return;
+  if(key==='type'){ it.surType = val==='pct' ? 'pct' : 'amt'; }
+  else { it.surType = it.surType || 'amt'; it.surVal = Math.max(0, Number(val)||0); }
+  renderCart();
+}
 function updateCartPrice(productId, price){
   const it = ORDER_CART.find(x=>x.productId===productId);
   if(it) it.unitPrice = Math.max(0, Number(price)||0);
@@ -2483,13 +2581,15 @@ function renderCart(){
         <td class="cell-center"><input type="number" min="0" value="${it.unitPrice}" style="width:80px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartPrice('${it.productId}', this.value)">${(it.standardPrice!=null && Number(it.unitPrice)<Number(it.standardPrice)) ? '<br><span style="font-size:11px;color:#B3261E;">দাম কমানো — ইনভয়েসে ছাড় দেখাবে না। "ছাড়" ঘর ব্যবহার করুন।</span>' : ''}</td>
         <td class="cell-center"><input type="number" min="0" step="any" value="${it.discVal||''}" placeholder="০" style="width:70px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartDisc('${it.productId}','val',this.value)">
           <select onchange="updateCartDisc('${it.productId}','type',this.value)" style="padding:5px;border:1px solid var(--border);border-radius:6px;background:#fff;"><option value="amt" ${it.discType!=='pct'?'selected':''}>৳</option><option value="pct" ${it.discType==='pct'?'selected':''}>%</option></select></td>
-        <td class="cell-num">${money(lineTotal)}${lineDisc(it)>0 ? `<br><span style="font-size:11.5px;color:#0E7448;">মূল ${money(lineGross(it))} − ছাড় ${money(lineDisc(it))}</span>` : ''}<br><span class="muted-cell">${r3(it.qty*optByKey(p,it.mode).factor)} ${esc(optByKey(p,it.mode).label)} = ${r3(it.qty)}টি ${esc(p?.unit||'কেজি')} × ${money(it.unitPrice)}</span></td>
+        <td class="cell-center"><input type="number" min="0" step="any" value="${it.surVal||''}" placeholder="০" style="width:70px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartSur('${it.productId}','val',this.value)">
+          <select onchange="updateCartSur('${it.productId}','type',this.value)" style="padding:5px;border:1px solid var(--border);border-radius:6px;background:#fff;"><option value="amt" ${it.surType!=='pct'?'selected':''}>৳</option><option value="pct" ${it.surType==='pct'?'selected':''}>%</option></select></td>
+        <td class="cell-num">${money(lineTotal)}${lineDisc(it)>0 ? `<br><span style="font-size:11.5px;color:#0E7448;">মূল ${money(lineGross(it))} − ছাড় ${money(lineDisc(it))}</span>` : ''}${lineSur(it)>0 ? `<br><span style="font-size:11.5px;color:#9A5B00;">+ বাড়তি ${money(lineSur(it))}</span>` : ''}<br><span class="muted-cell">${r3(it.qty*optByKey(p,it.mode).factor)} ${esc(optByKey(p,it.mode).label)} = ${r3(it.qty)}টি ${esc(p?.unit||'কেজি')} × ${money(it.unitPrice)}</span></td>
         <td class="cell-center"><button class="icon-btn danger" onclick="removeFromCart('${it.productId}')">🗑️</button></td>
       </tr>`;
   }).join('');
   holder.innerHTML = `
     <div class="table-wrap"><table>
-      <thead><tr><th>পণ্য</th><th>পরিমাণ</th><th>একক মূল্য</th><th>এই পণ্যে ছাড়</th><th>লাইন টোটাল</th><th></th></tr></thead>
+      <thead><tr><th>পণ্য</th><th>পরিমাণ</th><th>একক মূল্য</th><th>এই পণ্যে ছাড়</th><th>বাড়তি</th><th>লাইন টোটাল</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
     <table style="margin-top:8px;">
@@ -2498,7 +2598,7 @@ function renderCart(){
       ${discount>0 ? `<tr><td>ছাড় / ডিসকাউন্ট</td><td class="cell-num">− ${money(discount)}</td></tr>` : ''}
     </table>
     <div class="invoice-total-row" style="margin-top:6px;"><span>সর্বমোট</span><span>${money(Math.max(0,subtotal+deliveryCharge-discount))}</span></div>
-    <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">কোনো পণ্যে ছাড় দিতে লাইনের "এই পণ্যে ছাড়" ঘরে টাকা (৳) বা শতাংশ (%) লিখুন — ইনভয়েসে কোন পণ্যে কত ছাড় দিয়েছেন কাস্টমার তা দেখতে পাবেন। একক মূল্য কমাবেন না। পুরো বিলের উপর ছাড় উপরের "ছাড় / ডিসকাউন্ট" ঘরে দিন।</p>
+    <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">কোনো পণ্যে ছাড় দিতে লাইনের "এই পণ্যে ছাড়" ঘরে টাকা (৳) বা শতাংশ (%) লিখুন — ইনভয়েসে কোন পণ্যে কত ছাড় দিয়েছেন কাস্টমার তা দেখতে পাবেন। একক মূল্য কমাবেন না। পুরো বিলের উপর ছাড় উপরের "ছাড় / ডিসকাউন্ট" ঘরে দিন। হিসাব মেলাতে কোনো পণ্যে বাড়তি টাকা নিলে "বাড়তি" ঘরে লিখুন — ইনভয়েসে আলাদা দেখাবে।</p>
   `;
 }
 
@@ -2517,9 +2617,11 @@ function saveOrder(id){
       const o = optByKey(p, it.mode);
       return {productId:it.productId, qty:Number(it.qty), unitPrice:Number(it.unitPrice), standardPrice:Number(it.standardPrice!=null?it.standardPrice:it.unitPrice),
         lineDiscount: lineDisc(it), discType: it.discType==='pct'?'pct':'amt', discVal: Number(it.discVal)||0,
+        lineSurcharge: lineSur(it), surType: it.surType==='pct'?'pct':'amt', surVal: Number(it.surVal)||0,
         dq: r3(Number(it.qty)*o.factor), du: o.label};
     }),
     discount,
+    priceList: ORDER_PL,
     total: Math.max(0, subtotal + deliveryCharge - discount),
     deliveryCharge,
     source: document.getElementById('o_source').value,
@@ -2826,8 +2928,7 @@ function openPurchaseForm(id){
           </select>
         </div>
         <div class="form-field"><label>অথবা পণ্যের নাম লিখুন</label>
-          <input id="pu_pname" list="pu_names" autocomplete="off" placeholder="নাম লিখুন (তালিকার পণ্য হলে সেটিই ধরা হবে)" value="${(pu && !hasProd) ? esc(pu.productName||'') : ''}" oninput="onPurchaseNameType()">
-          <datalist id="pu_names">${products.map(p=>`<option value="${esc(p.name)}">`).join('')}</datalist>
+          <input id="pu_pname" autocomplete="off" placeholder="নাম লিখুন (তালিকার পণ্য হলে সেটিই ধরা হবে)" value="${(pu && !hasProd) ? esc(pu.productName||'') : ''}" oninput="onPurchaseNameType()">
           <span id="pu_matchhint" class="muted-cell" style="font-size:12px;"></span>
         </div>
       </div>
@@ -2870,6 +2971,7 @@ function openPurchaseForm(id){
       </div>
     </div>`);
   refreshPurchaseUnit();
+  purchaseSuggestInit();
 }
 // ফর্মে এখন কোন পণ্য বোঝানো হয়েছে: তালিকা থেকে বাছাই, নাকি লেখা নাম (বিদ্যমান/নতুন)
 function purchaseTargetProduct(){
@@ -3292,9 +3394,10 @@ function submitReturn(orderId){
         productId: it.productId, qty: retQty, refundAmount: Math.round(refundAmount*100)/100, reason,
         dq: r3(typed), du: oRet.label, restocked: order.status==='Delivered'
       });
-      const oldQ = Number(it.qty), oldDisc = lineDisc(it);
+      const oldQ = Number(it.qty), oldDisc = lineDisc(it), oldSur = lineSur(it);
       it.qty = r3(oldQ - retQty);
       it.lineDiscount = oldQ>0 ? Math.round(oldDisc*(it.qty/oldQ)*100)/100 : 0; it.discType = 'amt'; it.discVal = it.lineDiscount;
+      it.lineSurcharge = oldQ>0 ? Math.round(oldSur*(it.qty/oldQ)*100)/100 : 0; it.surType = 'amt'; it.surVal = it.lineSurcharge;
       syncDisp(it, products.find(x=>x.id===it.productId));
       if(order.status==='Delivered'){
         const pIdx = products.findIndex(p=>p.id===it.productId);
@@ -3333,44 +3436,44 @@ let DISC_MONTH = 'all';
 function onDiscMonth(sel){ DISC_MONTH = sel.value; renderDiscounts(); }
 function renderDiscounts(){
   const orders = CACHE.orders.filter(o => o.status!=='Cancelled' && (DISC_MONTH==='all' || mOf(o.date)===DISC_MONTH));
-  const products = CACHE.products;
-  const rows = [], byProd = {};
+  const products = CACHE.products, rows = [], byProd = {};
   let orderLevel = 0;
   orders.forEach(o => {
     orderLevel += Number(o.discount||0);
     orderItems(o).forEach(it => {
       const std = Number(it.standardPrice!=null ? it.standardPrice : it.unitPrice), actual = Number(it.unitPrice);
-      const priceDisc = std > actual ? (std-actual)*Number(it.qty) : 0, ld = lineDisc(it), total = priceDisc + ld;
-      if(total > 0){
+      const priceDisc = std > actual ? (std-actual)*Number(it.qty) : 0, ld = lineDisc(it), sx = lineSur(it), total = priceDisc + ld;
+      if(total > 0 || sx > 0){
         const p = products.find(x => x.id===it.productId), name = p ? p.name : '—';
-        rows.push({date:o.date, orderId:o.id, customerName:o.customerName, productName:name, qty:fmtItem(it,p), std, actual, ld, priceDisc, total});
-        const a = byProd[it.productId] || (byProd[it.productId] = {name, count:0, total:0}); a.count++; a.total += total;
+        rows.push({date:o.date, orderId:o.id, customerName:o.customerName, productName:name, qty:fmtItem(it,p), std, ld, priceDisc, sx, total});
+        const a = byProd[it.productId] || (byProd[it.productId] = {name, count:0, total:0, sur:0}); a.count++; a.total += total; a.sur += sx;
       }
     });
   });
   rows.sort((a,b) => (a.date<b.date?1:-1));
-  const lineTotal = rows.reduce((t,r) => t + r.total, 0);
-  const prodRows = Object.values(byProd).sort((a,b) => b.total-a.total);
+  const lineTotal = rows.reduce((t,r) => t + r.total, 0), surTotal = rows.reduce((t,r) => t + r.sx, 0);
+  const prodRows = Object.values(byProd).sort((a,b) => (b.total+b.sur)-(a.total+a.sur));
   document.getElementById('pageContent').innerHTML = `
     <div class="toolbar"><label style="font-size:13px;font-weight:700;">মাস:</label><select onchange="onDiscMonth(this)">${monthOptionsHtml(DISC_MONTH, true)}</select></div>
     <div class="grid grid-2" style="margin-bottom:16px;">
       <div class="stat-card warn"><div class="label">পণ্যভিত্তিক মোট ছাড়</div><div class="value">${money(r2(lineTotal))}</div></div>
+      <div class="stat-card"><div class="label">পণ্যভিত্তিক মোট বাড়তি নেওয়া</div><div class="value">${money(r2(surTotal))}</div></div>
       <div class="stat-card"><div class="label">পুরো বিলের উপর ছাড় (অর্ডার-স্তরে)</div><div class="value">${money(r2(orderLevel))}</div></div>
     </div>
     <div class="panel">
-      <h3>কোন পণ্যে কত ছাড় দেওয়া হয়েছে</h3>
-      <div class="table-wrap"><table><thead><tr><th>পণ্য</th><th>কতবার</th><th>মোট ছাড়</th></tr></thead><tbody>
-        ${prodRows.map(r => `<tr><td>${esc(r.name)}</td><td class="cell-num">${r.count}</td><td class="cell-num"><b>${money(r2(r.total))}</b></td></tr>`).join('') || '<tr><td colspan="3" class="empty-state">এখনো কোনো পণ্যে ছাড় দেওয়া হয়নি</td></tr>'}
+      <h3>কোন পণ্যে কত ছাড় ও বাড়তি</h3>
+      <div class="table-wrap"><table><thead><tr><th>পণ্য</th><th>কতবার</th><th>মোট ছাড়</th><th>মোট বাড়তি</th></tr></thead><tbody>
+        ${prodRows.map(r => `<tr><td>${esc(r.name)}</td><td class="cell-num">${r.count}</td><td class="cell-num">${r.total>0?'<b>'+money(r2(r.total))+'</b>':'—'}</td><td class="cell-num">${r.sur>0?'<b>'+money(r2(r.sur))+'</b>':'—'}</td></tr>`).join('') || '<tr><td colspan="4" class="empty-state">এখনো কোনো পণ্যে ছাড় বা বাড়তি নেই</td></tr>'}
       </tbody></table></div>
     </div>
     <div class="panel">
-      <h3>ছাড়ের বিস্তারিত (অর্ডার ধরে)</h3>
-      <p style="font-size:12.5px;color:var(--text-muted);">কার্টে "এই পণ্যে ছাড়" ঘরে দেওয়া ছাড় ইনভয়েসে কাস্টমারকে দেখানো হয়। একক মূল্য সরাসরি কমালেও (পুরোনো নিয়মে) এখানে ধরা পড়ে, কিন্তু সেটা ইনভয়েসে ছাড় হিসেবে দেখায় না।</p>
+      <h3>বিস্তারিত (অর্ডার ধরে)</h3>
+      <p style="font-size:12.5px;color:var(--text-muted);">কার্টের "এই পণ্যে ছাড়" ও "বাড়তি" ঘরের টাকা ইনভয়েসে কাস্টমারকে আলাদা দেখানো হয়। একক মূল্য সরাসরি কমালেও এখানে "দাম কমানো" হিসেবে ধরা পড়ে, কিন্তু ইনভয়েসে ছাড় হিসেবে দেখায় না। মূল্য তালিকা (পাইকারি/কর্পোরেট) ছাড় নয়, তাই এখানে আসে না।</p>
       <div class="table-wrap"><table><thead><tr>
-        <th>তারিখ</th><th>অর্ডার</th><th>কাস্টমার</th><th>পণ্য</th><th>পরিমাণ</th><th>নির্ধারিত মূল্য</th><th>পণ্যে ছাড়</th><th>দাম কমানো</th><th>মোট ছাড়</th>
+        <th>তারিখ</th><th>অর্ডার</th><th>কাস্টমার</th><th>পণ্য</th><th>পরিমাণ</th><th>নির্ধারিত মূল্য</th><th>পণ্যে ছাড়</th><th>দাম কমানো</th><th>বাড়তি</th>
       </tr></thead><tbody>
         ${rows.map(r => `<tr><td>${r.date}</td><td>${r.orderId}</td><td>${esc(r.customerName)}</td><td>${esc(r.productName)}</td>
-          <td class="cell-num">${esc(String(r.qty))}</td><td class="cell-num">${money(r.std)}</td><td class="cell-num">${r.ld>0?money(r.ld):'—'}</td><td class="cell-num">${r.priceDisc>0?money(r2(r.priceDisc)):'—'}</td><td class="cell-num"><b>${money(r2(r.total))}</b></td></tr>`).join('') || '<tr><td colspan="9" class="empty-state">এখনো কোনো পণ্যে ছাড় দেওয়া হয়নি</td></tr>'}
+          <td class="cell-num">${esc(String(r.qty))}</td><td class="cell-num">${money(r.std)}</td><td class="cell-num">${r.ld>0?money(r.ld):'—'}</td><td class="cell-num">${r.priceDisc>0?money(r2(r.priceDisc)):'—'}</td><td class="cell-num">${r.sx>0?'<b>+ '+money(r2(r.sx))+'</b>':'—'}</td></tr>`).join('') || '<tr><td colspan="9" class="empty-state">এখনো কোনো পণ্যে ছাড় বা বাড়তি নেই</td></tr>'}
       </tbody></table></div>
     </div>
   `;
@@ -3568,10 +3671,13 @@ function saveContribution(shareholderId){
    হাতে লেখা বিনিয়োগ + স্টক/বকেয়া থেকে "আটকে থাকা টাকা" — দুই হিসাব পাশাপাশি
    ============================================================ */
 let INV_EDIT = '';
-function invSum(pred){ return r2(CACHE.investments.filter(pred).reduce((t,x) => t + Number(x.amount||0), 0)); }
+function invSigned(x){ return (x.type==='out' ? -1 : 1) * Number(x.amount||0); }
+function invSum(pred){ return r2(CACHE.investments.filter(pred).reduce((t,x) => t + invSigned(x), 0)); }
+function invIn(pred){ return r2(CACHE.investments.filter(x => x.type!=='out' && pred(x)).reduce((t,x) => t + Number(x.amount||0), 0)); }
+function invOut(pred){ return r2(CACHE.investments.filter(x => x.type==='out' && pred(x)).reduce((t,x) => t + Number(x.amount||0), 0)); }
 function invPct(a, b){ return b>0 ? (a/b*100).toFixed(2) + '%' : '—'; }
 function investPanelHtml(m, d, carryEnd){
-  const before = invSum(x => mOf(x.date) < m), thisM = invSum(x => mOf(x.date)===m), capital = r2(before + thisM);
+  const before = invSum(x => mOf(x.date) < m), thisIn = invIn(x => mOf(x.date)===m), thisOut = invOut(x => mOf(x.date)===m), capital = r2(before + thisIn - thisOut);
   const custDue = r2(CACHE.orders.filter(o => o.status==='Delivered' && mOf(o.date) <= m).reduce((t,o) => t + orderDue(o), 0));
   const supDue = r2(CACHE.purchases.filter(pu => mOf(pu.date) <= m).reduce((t,pu) => t + purchaseDue(pu), 0));
   const stuck = r2(d.closeVal + custDue - supDue);
@@ -3589,9 +3695,10 @@ function investPanelHtml(m, d, carryEnd){
       </div>
       <h4 style="margin:10px 0 4px;">ক) হাতে লেখা বিনিয়োগ অনুযায়ী</h4>
       <table>
-        <tr><td>আগের মাস পর্যন্ত মোট বিনিয়োগ (জের)</td><td class="cell-num">${money(before)}</td></tr>
-        <tr><td>+ এই মাসের নতুন বিনিয়োগ</td><td class="cell-num">${money(thisM)}</td></tr>
-        <tr><td><b>মোট মূলধন (মাস শেষে)</b></td><td class="cell-num"><b>${money(capital)}</b></td></tr>
+        <tr><td>আগের মাস পর্যন্ত নিট মূলধন (বিনিয়োগ − উত্তোলন, জের)</td><td class="cell-num" style="${neg(before)}">${money(before)}</td></tr>
+        <tr><td>+ এই মাসের নতুন বিনিয়োগ</td><td class="cell-num">${money(thisIn)}</td></tr>
+        <tr><td>− এই মাসের উত্তোলন</td><td class="cell-num">${money(thisOut)}</td></tr>
+        <tr><td><b>মোট মূলধন (মাস শেষে)</b></td><td class="cell-num" style="${neg(capital)}"><b>${money(capital)}</b></td></tr>
         <tr><td>এই মাসের নিট প্রফিট</td><td class="cell-num" style="${neg(d.net)}">${money(d.net)}</td></tr>
         <tr><td>মোট জমা নিট প্রফিট (মাস শেষ পর্যন্ত)</td><td class="cell-num" style="${neg(carryEnd)}">${money(carryEnd)}</td></tr>
         <tr><td><b>মোট রিটার্ন (জমা প্রফিট ÷ মোট মূলধন)</b></td><td class="cell-num"><b>${invPct(carryEnd, capital)}</b></td></tr>
@@ -3604,33 +3711,35 @@ function investPanelHtml(m, d, carryEnd){
         <tr><td>− সরবরাহকারীর বকেয়া (এখনকার, এই মাস পর্যন্ত ক্রয়ের)</td><td class="cell-num">− ${money(supDue)}</td></tr>
       </table>
       <div class="invoice-total-row"><span>ব্যবসায় আটকে থাকা টাকা</span><span>${money(stuck)}</span></div>
-      <h4 style="margin:16px 0 6px;">বিনিয়োগ এন্ট্রি — ${monthLabel(m)}</h4>
-      ${locked ? '<div class="flash warn">🔒 এই মাস লক করা — বিনিয়োগ যোগ বা বদলানো যাবে না।</div>' : `
+      <h4 style="margin:16px 0 6px;">বিনিয়োগ / উত্তোলন এন্ট্রি — ${monthLabel(m)}</h4>
+      ${locked ? '<div class="flash warn">🔒 এই মাস লক করা — এন্ট্রি যোগ বা বদলানো যাবে না।</div>' : `
       <div class="form-grid">
+        <div class="form-field"><label>ধরন</label><select id="inv_type" style="padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);"><option value="in" ${!ed||ed.type!=='out'?'selected':''}>বিনিয়োগ (ব্যবসায় টাকা ঢাললাম)</option><option value="out" ${ed&&ed.type==='out'?'selected':''}>উত্তোলন (ব্যবসা থেকে টাকা তুললাম)</option></select></div>
         ${dateField('inv_date', defDate)}
-        <div class="form-field"><label>বিনিয়োগের পরিমাণ (৳)</label><input id="inv_amount" type="number" step="any" value="${ed?ed.amount:''}" placeholder="যেমন: 50000"></div>
+        <div class="form-field"><label>পরিমাণ (৳)</label><input id="inv_amount" type="number" step="any" value="${ed?ed.amount:''}" placeholder="যেমন: 50000"></div>
         <div class="form-field"><label>নোট (ঐচ্ছিক)</label><input id="inv_note" value="${ed?esc(ed.note||''):''}" placeholder="যেমন: নিজের সঞ্চয় থেকে"></div>
       </div>
       <div style="margin-top:10px;display:flex;gap:8px;">
-        <button class="btn btn-primary btn-sm" onclick="saveInvestment()">${ed?'সংশোধন সংরক্ষণ':'+ বিনিয়োগ যোগ করুন'}</button>
+        <button class="btn btn-primary btn-sm" onclick="saveInvestment()">${ed?'সংশোধন সংরক্ষণ':'+ যোগ করুন'}</button>
         ${ed ? '<button class="btn btn-outline btn-sm" onclick="INV_EDIT=\'\';renderProfitLoss()">বাতিল</button>' : ''}
       </div>`}
-      <div class="table-wrap" style="margin-top:10px;"><table><thead><tr><th>তারিখ</th><th>পরিমাণ</th><th>নোট</th><th>একশন</th></tr></thead><tbody>
-        ${entries.map(x => `<tr><td>${x.date}</td><td class="cell-num">${money(x.amount)}</td><td>${esc(x.note||'')}</td><td class="cell-center">${isDateLocked(x.date) ? '🔒' : `<button class="icon-btn" onclick="editInvestment('${x.id}')">✏️</button><button class="icon-btn danger" onclick="deleteInvestment('${x.id}')">🗑️</button>`}</td></tr>`).join('') || '<tr><td colspan="4" class="empty-state">এই মাসে কোনো নতুন বিনিয়োগ লেখা হয়নি</td></tr>'}
+      <div class="table-wrap" style="margin-top:10px;"><table><thead><tr><th>তারিখ</th><th>ধরন</th><th>পরিমাণ</th><th>নোট</th><th>একশন</th></tr></thead><tbody>
+        ${entries.map(x => `<tr><td>${x.date}</td><td>${x.type==='out'?'উত্তোলন':'বিনিয়োগ'}</td><td class="cell-num" style="${x.type==='out'?'color:#B3261E;':'color:#167A54;'}">${x.type==='out'?'− ':'+ '}${money(x.amount)}</td><td>${esc(x.note||'')}</td><td class="cell-center">${isDateLocked(x.date) ? '🔒' : `<button class="icon-btn" onclick="editInvestment('${x.id}')">✏️</button><button class="icon-btn danger" onclick="deleteInvestment('${x.id}')">🗑️</button>`}</td></tr>`).join('') || '<tr><td colspan="5" class="empty-state">এই মাসে কোনো বিনিয়োগ বা উত্তোলন লেখা হয়নি</td></tr>'}
       </tbody></table></div>
-      <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">"ক" অংশের মূলধন আপনার হাতে লেখা বিনিয়োগের যোগফল। "খ" অংশ স্টক ও বকেয়া থেকে আনুমানিক — সফটওয়্যার ক্যাশ বা ব্যাংকের টাকা ট্র্যাক করে না।</p>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">"ক" অংশের মূলধন = আপনার হাতে লেখা বিনিয়োগের যোগফল − উত্তোলন। মাল কেনা বিনিয়োগ নয়, তাই ক্রয় খাতার টাকা এখানে যোগ করবেন না। "খ" অংশ স্টক ও বকেয়া থেকে আনুমানিক — সফটওয়্যার ক্যাশ বা ব্যাংকের টাকা ট্র্যাক করে না।</p>
     </div>`;
 }
 function saveInvestment(){
-  if(!isAdmin()){ alert('শুধু অ্যাডমিন বিনিয়োগ লিখতে পারবেন'); return; }
+  if(!isAdmin()){ alert('শুধু অ্যাডমিন লিখতে পারবেন'); return; }
   const amount = Number(document.getElementById('inv_amount').value||0);
-  if(!(amount>0)){ alert('বিনিয়োগের পরিমাণ সঠিকভাবে দিন'); return; }
+  if(!(amount>0)){ alert('পরিমাণ সঠিকভাবে দিন'); return; }
+  const type = (document.getElementById('inv_type')||{}).value==='out' ? 'out' : 'in';
   const date = pickedDate('inv_date'), note = document.getElementById('inv_note').value.trim();
   const old = INV_EDIT ? CACHE.investments.find(x => x.id===INV_EDIT) : null;
   if(!guardDates([date, old && old.date], old ? 'সংশোধন' : 'এন্ট্রি')) return;
   const arr = CACHE.investments.slice();
-  if(old){ const i = arr.findIndex(x => x.id===old.id); arr[i] = stampEdit({...old, date, amount, note}); }
-  else arr.push({id: genId('INV-', arr), date, amount, note});
+  if(old){ const i = arr.findIndex(x => x.id===old.id); arr[i] = stampEdit({...old, date, amount, note, type}); }
+  else arr.push({id: genId('INV-', arr), date, amount, note, type});
   if(saveCollection('investments', arr)){ INV_EDIT = ''; VIEW_MONTH = mOf(date) || VIEW_MONTH; renderProfitLoss(); }
 }
 function editInvestment(id){ const x = CACHE.investments.find(v => v.id===id); if(!x || !guardDate(x.date, 'সংশোধন')) return; INV_EDIT = id; renderProfitLoss(); }
@@ -3642,6 +3751,21 @@ function deleteInvestment(id){
   saveCollection('investments', CACHE.investments.filter(v => v.id!==id)); renderProfitLoss();
 }
 
+function priceListPanelHtml(m){
+  const g = {};
+  CACHE.orders.filter(o => o.status==='Delivered' && mOf(o.date)===m).forEach(o => {
+    const k = o.priceList && PRICE_LISTS[o.priceList] ? o.priceList : 'retail', a = g[k] || (g[k] = {n:0, rev:0, cogs:0});
+    a.n++; a.rev += Number(o.total||0);
+    orderItems(o).forEach(it => { const p = CACHE.products.find(x => x.id===it.productId); a.cogs += (p ? Number(p.cost||0) : 0) * Number(it.qty||0); });
+  });
+  const keys = Object.keys(PRICE_LISTS).filter(k => g[k]); if(!keys.length) return '';
+  const tot = keys.reduce((t,k) => ({n:t.n+g[k].n, rev:t.rev+g[k].rev, cogs:t.cogs+g[k].cogs}), {n:0,rev:0,cogs:0});
+  const row = (name, a) => `<tr><td>${name}</td><td class="cell-num">${a.n}</td><td class="cell-num">${money(r2(a.rev))}</td><td class="cell-num">${money(r2(a.cogs))}</td><td class="cell-num"><b>${money(r2(a.rev-a.cogs))}</b></td><td class="cell-num">${a.rev>0 ? ((a.rev-a.cogs)/a.rev*100).toFixed(1)+'%' : '—'}</td></tr>`;
+  return `<div class="panel"><h3>মূল্য তালিকা অনুযায়ী বিক্রয় ও লাভ — ${monthLabel(m)}</h3>
+    <div class="table-wrap"><table><thead><tr><th>তালিকা</th><th>অর্ডার</th><th>বিক্রয়</th><th>ক্রয়মূল্য</th><th>গ্রস লাভ</th><th>মার্জিন</th></tr></thead><tbody>
+    ${keys.map(k => row(PRICE_LISTS[k], g[k])).join('')}${keys.length>1 ? row('<b>মোট</b>', tot) : ''}</tbody></table></div>
+    <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">গ্রস লাভ = বিক্রয় − ক্রয়মূল্য (খরচ ও কমিশনের আগে)। ডেলিভারড অর্ডার ধরা হয়েছে; ক্রয়মূল্য এখনকার ভাউচার গড়ে।</p></div>`;
+}
 function renderProfitLoss(){
   if(!monthsList().includes(VIEW_MONTH)) VIEW_MONTH = curMonth();
   const m = VIEW_MONTH, idx = moveIndex(), d = monthData(m, idx);
@@ -3674,6 +3798,7 @@ function renderProfitLoss(){
       <div class="invoice-total-row"><span>মাস শেষে মোট জমা নিট প্রফিট (পরের মাসে যাবে)</span><span>${money(carryEnd)}</span></div>
       <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">জের পরের মাসে নিজে থেকেই যোগ হয়। আগের মাসে পুরোনো তারিখে কোনো এন্ট্রি দিলে পরের মাসের জের নিজে থেকেই ঠিক হয়ে যায়।</p>
     </div>
+    ${priceListPanelHtml(m)}
     ${investPanelHtml(m, d, carryEnd)}
   `;
 }
@@ -3713,7 +3838,7 @@ function drawInvoice(){
     const p = CACHE.products.find(x=>x.id===it.productId);
     return `<tr>
       <td>${esc(p?p.name:'—')}</td>
-      <td class="cell-num">${fmtItem(it, p)}</td><td class="cell-num">${money(it.unitPrice)}${p?.unit?`/${esc(p.unit)}`:''}</td><td class="cell-num">${lineDisc(it)>0 ? `− ${money(lineDisc(it))}${it.discType==='pct'?`<br><span class="muted-cell" style="font-size:10.5px;">(${it.discVal}%)</span>`:''}` : '<span class="muted-cell">—</span>'}</td><td class="cell-num">${money(lineAmt(it))}</td>
+      <td class="cell-num">${fmtItem(it, p)}</td><td class="cell-num">${money(it.unitPrice)}${p?.unit?`/${esc(p.unit)}`:''}</td><td class="cell-num">${lineDisc(it)>0 ? `− ${money(lineDisc(it))}${it.discType==='pct'?`<br><span class="muted-cell" style="font-size:10.5px;">(${it.discVal}%)</span>`:''}` : '<span class="muted-cell">—</span>'}</td>${items.some(x=>lineSur(x)>0) ? '<td class="cell-num">'+(lineSur(it)>0 ? '+ '+money(lineSur(it)) : '<span class="muted-cell">—</span>')+'</td>' : ''}<td class="cell-num">${money(lineAmt(it))}</td>
     </tr>`;
   }).join('');
 
@@ -3732,7 +3857,7 @@ function drawInvoice(){
         <div style="text-align:left">${esc(o.customerName)}<br>${esc(o.phone)}<br>${esc(o.address)}</div>
       </div>
       <table>
-        <thead><tr><th>পণ্য</th><th>পরিমাণ</th><th>একক মূল্য</th><th>ছাড়</th><th>মোট</th></tr></thead>
+        <thead><tr><th>পণ্য</th><th>পরিমাণ</th><th>একক মূল্য</th><th>ছাড়</th>${items.some(x=>lineSur(x)>0)?'<th>বাড়তি</th>':''}<th>মোট</th></tr></thead>
         <tbody>${itemRows}</tbody>
       </table>
       <table style="margin-top:8px;">
@@ -3807,7 +3932,7 @@ function shareWhatsapp(orderId){
   const items = orderItems(o);
   const lines = items.map(it=>{
     const p = CACHE.products.find(x=>x.id===it.productId);
-    return lineDisc(it)>0 ? `${p?p.name:''} — ${fmtItem(it, p)} = ৳${lineGross(it)} − ছাড় ৳${lineDisc(it)} = ৳${lineAmt(it)}` : `${p?p.name:''} — ${fmtItem(it, p)} = ৳${lineAmt(it)}`;
+    { const d0 = lineDisc(it), sx = lineSur(it), base = `${p?p.name:''} — ${fmtItem(it, p)}`; return (d0>0||sx>0) ? `${base} = ৳${lineGross(it)}${d0>0?` − ছাড় ৳${d0}`:''}${sx>0?` + বাড়তি ৳${sx}`:''} = ৳${lineAmt(it)}` : `${base} = ৳${lineAmt(it)}`; }
   }).join('\n');
   const text = `Avera Mart ইনভয়েস ${o.id}\nকাস্টমার: ${o.customerName}\n${lines}\nসর্বমোট: ৳${o.total}\nধন্যবাদ ${CACHE.settings.tagline||''} — Avera Mart থেকে কেনাকাটার জন্য।`;
   const phone = (o.phone||'').replace(/\D/g,'');
@@ -4077,7 +4202,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৩.৯.৩';
+const APP_VERSION = '৪.১';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{
