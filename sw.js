@@ -1,8 +1,8 @@
 // Avera Mart service worker.
-// Network-first for the app's own files, so every GitHub update shows up straight away
-// when online; the saved copy is used only when offline. Firebase/Firestore traffic
+// Network-first for the app's own files (always revalidated, bypassing the browser's 10-minute HTTP cache),
+// so every GitHub update shows up straight away when online; the saved copy is used only when offline. Firebase/Firestore traffic
 // (other domains) is never touched, so business data is never served stale.
-const CACHE = 'avera-mart-v20';
+const CACHE = 'avera-mart-v23';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'firebase-config.js', 'logo.jpg', 'icon-192.png', 'icon-512.png', 'manifest.json', 'manual.html'];
 
 self.addEventListener('install', (event) => {
@@ -21,7 +21,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
   event.respondWith(
-    fetch(req).then(res => {
+    fetch(req, {cache:'no-cache'}).then(res => {
       if (res && res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
       return res;
     }).catch(() => caches.match(req).then(r => r || (req.mode === 'navigate' ? caches.match('index.html') : undefined)))

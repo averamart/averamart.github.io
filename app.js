@@ -710,7 +710,7 @@ function renderClosing(){
 function avgCostOf(purchases, pid){
   let q = 0, c = 0;
   purchases.forEach(pu => { if(pu.productId===pid && Number(pu.qty)>0){ q += Number(pu.qty); c += Number(pu.totalCost||0); } });
-  return (q>0 && c>0) ? Math.round(c/q*10000)/10000 : null;
+  return (q>0 && c>0) ? c/q : null;   // পূর্ণ নির্ভুলতা — ছোট দশমিক জমে পার্থক্য হয় না
 }
 function applyAvgCosts(products, purchases, ids){
   (ids||[]).forEach(pid => {
@@ -724,7 +724,7 @@ function avgCostPlan(){
   const list = [];
   CACHE.products.forEach(p => {
     const a = avgCostOf(CACHE.purchases, p.id);
-    if(a!==null && Math.abs(a - Number(p.cost||0)) > 0.0005) list.push({p, oldCost:Number(p.cost||0), newCost:a});
+    if(a!==null && Math.abs(a - Number(p.cost||0)) > 1e-7) list.push({p, oldCost:Number(p.cost||0), newCost:a});
   });
   const valBefore = CACHE.products.reduce((t,p) => t + Math.max(0,Number(p.stock||0))*Number(p.cost||0), 0);
   const map = {}; list.forEach(x => { map[x.p.id] = x.newCost; });
@@ -1645,6 +1645,18 @@ function fixDupIds(){
   products.forEach((p,i) => { if(seen[p.id]){ p.id = genId('P', products); } seen[p.id] = 1; });
   if(saveCollection('products', products)){ alert('✅ আইডি ঠিক হয়েছে'); renderStockCheck(); }
 }
+function reconcileStock(pid){
+  if(!isAdmin()){ alert('শুধু অ্যাডমিন করতে পারবেন'); return; }
+  const d = stockCheckData(), list = pid==='ALL' ? d.mism : d.mism.filter(r => r.p.id===pid);
+  if(!list.length){ alert('মেলানোর মতো কিছু নেই'); return; }
+  if(!guardDate(todayStr(), 'সমন্বয়')) return;
+  const val = r2(list.reduce((t,r) => t + r.U*r.cost, 0));
+  if(!confirm(`${list.length}টি পণ্যের স্টক রেকর্ডের সাথে মেলানো হবে।\n\nস্টক যেমন আছে তেমনই থাকবে — শুধু "সমন্বয়" হিসেবে একটা রেকর্ড যোগ হবে (মোট ক্রয়মূল্য ${money(val)})। এটি বিক্রয় বা খরচ হিসেবে লাভ-ক্ষতিতে ধরা হবে না।\n\nএগিয়ে যাবেন?`)) return;
+  const note = prompt('সমন্বয়ের কারণ লিখুন (ঐচ্ছিক) — যেমন: পরীক্ষার এন্ট্রি, নষ্ট/হারানো মাল', ''); if(note===null) return;
+  const map = {}; list.forEach(r => { map[r.p.id] = r.U; });
+  const products = CACHE.products.map(p => map[p.id]!==undefined ? {...p, adj:(p.adj||[]).concat([{d: todayStr(), q: r3(map[p.id]), n: (note||'').trim() || 'সমন্বয় (পার্থক্য মেলানো)'}])} : p);
+  if(saveCollection('products', products)){ alert('✅ সমন্বয় রেকর্ড হয়েছে — স্টক অপরিবর্তিত আছে'); renderStockCheck(); }
+}
 function stockCheckData(){
   const lastBuy = {};
   CACHE.purchases.slice().sort((a,b)=> String(a.date).localeCompare(String(b.date))).forEach(pu => { if(pu.productId && Number(pu.qty)>0) lastBuy[pu.productId] = Number(pu.totalCost||0)/Number(pu.qty); });
@@ -1757,9 +1769,10 @@ function renderStockCheck(){
       <button class="btn btn-primary" style="margin-top:10px;" onclick="applyAvgCostsAll()">🔄 সব পণ্যের ক্রয়মূল্য ভাউচার গড় অনুযায়ী ঠিক করুন</button></div>` : ''; })()}
     ${d.mism.length ? `<div class="panel"><h3>যেসব পণ্যের স্টক ক্রয়-বিক্রয়ের রেকর্ডের সাথে মিলছে না</h3>
       <p style="font-size:12.5px;color:var(--text-muted);">"রেকর্ড অনুযায়ী" = ক্রয় − বিক্রয় + রিটার্ন + লগ করা সমন্বয়। "পার্থক্য" মানে এই পরিমাণ স্টক রেকর্ড ছাড়া আছে (পণ্য খোলার সময় বা এক্সেল/পণ্য তালিকা থেকে বসানো)। যদি ভাউচারে এই মাল কেনা হয়ে থাকে, তাহলে ক্রয় খাতায় এন্ট্রি দিন — অথবা স্টক ভুল থাকলে পণ্য তালিকায় সঠিক করুন।</p>
-      <div class="table-wrap"><table><thead><tr><th>পণ্য</th><th>বর্তমান স্টক</th><th>রেকর্ড অনুযায়ী</th><th>পার্থক্য</th><th>মূল্য (ক্রয়)</th></tr></thead><tbody>
-      ${d.mism.slice().sort((a,b)=>Math.abs(b.U*b.cost)-Math.abs(a.U*a.cost)).slice(0,40).map(r=>`<tr><td>${esc(r.p.name)}</td><td class="cell-num">${fmtStock(r.st,r.p)}</td><td class="cell-num">${r.expected} ${esc(r.p.unit||'কেজি')}</td><td class="cell-num"><b>${r3(r.U)}</b></td><td class="cell-num">${money(r2(r.U*r.cost))}</td></tr>`).join('')}
+      <div class="table-wrap"><table><thead><tr><th>পণ্য</th><th>বর্তমান স্টক</th><th>রেকর্ড অনুযায়ী</th><th>পার্থক্য</th><th>মূল্য (ক্রয়)</th><th>সমন্বয়</th></tr></thead><tbody>
+      ${d.mism.slice().sort((a,b)=>Math.abs(b.U*b.cost)-Math.abs(a.U*a.cost)).slice(0,40).map(r=>`<tr><td>${esc(r.p.name)}</td><td class="cell-num">${fmtStock(r.st,r.p)}</td><td class="cell-num">${r.expected} ${esc(r.p.unit||'কেজি')}</td><td class="cell-num"><b>${r3(r.U)}</b></td><td class="cell-num">${money(r2(r.U*r.cost))}</td><td class="cell-center"><button class="btn btn-outline btn-sm" onclick="reconcileStock('${r.p.id}')">✅ মেলান</button></td></tr>`).join('')}
       </tbody></table></div>
+      <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="reconcileStock('ALL')">✅ সব পার্থক্য সমন্বয় হিসেবে রেকর্ড করুন (স্টক যেমন আছে তেমনই থাকবে)</button>
       ${d.mism.length>40 ? `<p class="muted-cell">আরও ${d.mism.length-40}টি আছে (বড় পার্থক্যগুলো আগে দেখানো হয়েছে)।</p>` : ''}</div>` : ''}
     ${anomalies ? `<div class="panel"><h3>সম্ভাব্য সমস্যা</h3>${anomalies}</div>` : `<div class="flash">✅ স্টক বা দামের ডেটায় কোনো স্পষ্ট অসঙ্গতি পাওয়া যায়নি।</div>`}
     <div class="panel">
@@ -2175,7 +2188,7 @@ function saveProduct(id){
   const data = {
     name,
     category: document.getElementById('f_cat').value,
-    cost: isAdmin ? per(Number(document.getElementById('f_cost').value||0)) : (products.find(p=>p.id===id)?.cost || 0),
+    cost: (() => { const old0 = id ? products.find(p=>p.id===id) : null; if(!isAdmin) return old0 ? (old0.cost||0) : 0; const v = Number(document.getElementById('f_cost').value||0); if(old0 && (Number(old0.priceBasis)||1)===basis && Math.abs(v - packPrice(old0,'cost')) < 0.0051) return old0.cost; return per(v); })(),
     unit: document.getElementById('f_unit').value.trim() || 'কেজি',
     priceBasis: basis,
     packSize: parsePackUnit(document.getElementById('f_unit').value.trim()) ? 0 : (products.find(p=>p.id===id)?.packSize || 0),
@@ -4064,7 +4077,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৩.৯';
+const APP_VERSION = '৩.৯.৩';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{
@@ -4087,6 +4100,6 @@ async function forceRefreshApp(){
     if('serviceWorker' in navigator){ const regs = await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r=>r.unregister())); }
     if(window.caches){ const keys = await caches.keys(); await Promise.all(keys.map(k=>caches.delete(k))); }
   }catch(e){}
-  location.reload();
+  location.replace(location.pathname + '?v=' + Date.now());   // নতুন ঠিকানা — ব্রাউজারের জমানো কপি এড়িয়ে সরাসরি নতুন ফাইল আনে
 }
 document.addEventListener('DOMContentLoaded', showAppVersion);
