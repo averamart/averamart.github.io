@@ -1730,6 +1730,85 @@ function reconcileStock(pid){
   const products = CACHE.products.map(p => map[p.id]!==undefined ? {...p, adj:(p.adj||[]).concat([{d: todayStr(), q: r3(map[p.id]), n: (note||'').trim() || 'সমন্বয় (পার্থক্য মেলানো)'}])} : p);
   if(saveCollection('products', products)){ alert('✅ সমন্বয় রেকর্ড হয়েছে — স্টক অপরিবর্তিত আছে'); renderStockCheck(); }
 }
+/* ============================================================
+   FULL REPORT — সম্পূর্ণ হিসাব রিপোর্ট (স্টক থেকে বিক্রয় পর্যন্ত সব একসাথে PDF / Excel)
+   এটি পড়ার ও সংরক্ষণের রিপোর্ট; ডেটা ফেরত আনার ব্যাকআপ হলো উপরের ফাইল ব্যাকআপ (JSON)।
+   ============================================================ */
+let FR_MONTH = 'all', FR_LINES = true;
+function fullReportModel(){
+  const m = FR_MONTH, inR = d => m==='all' || mOf(d)===m, idx = moveIndex();
+  const months = monthsList().filter(x => m==='all' || x===m), md = months.map(x => monthData(x, idx));
+  const pn = id => { const p = CACHE.products.find(x => x.id===id); return p ? p.name : (id||'—'); };
+  const orders = CACHE.orders.filter(o => inR(o.date)).slice().sort((a,b) => a.date < b.date ? -1 : 1);
+  const purchases = CACHE.purchases.filter(p => inR(p.date)).slice().sort((a,b) => a.date < b.date ? -1 : 1);
+  const exps = CACHE.expenses.filter(e => inR(e.date)).slice().sort((a,b) => a.date < b.date ? -1 : 1);
+  const rets = CACHE.returns.filter(r => inR(r.date)), invs = CACHE.investments.filter(x => inR(x.date));
+  const delivered = orders.filter(o => o.status==='Delivered');
+  const st = stockTotals(), sales = r2(delivered.reduce((t,o) => t + Number(o.total||0), 0)), buy = r2(purchases.reduce((t,p) => t + Number(p.totalCost||0), 0));
+  const expT = r2(exps.filter(e => e.kind!=='income').reduce((t,e) => t + Number(e.amount||0), 0)), incT = r2(exps.filter(e => e.kind==='income').reduce((t,e) => t + Number(e.amount||0), 0));
+  const net = r2(md.reduce((t,d) => t + d.net, 0));
+  const custDue = r2(CACHE.orders.filter(o => o.status!=='Cancelled').reduce((t,o) => t + orderDue(o), 0)), supDue = r2(CACHE.purchases.reduce((t,p) => t + purchaseDue(p), 0));
+  const capital = invSum(() => true);
+  const rangeLbl = m==='all' ? 'সব সময়' : monthLabel(m);
+  const model = {title:'সম্পূর্ণ হিসাব রিপোর্ট', when: exNow(), summary:[], tables:[]};
+  const S = (a,b) => model.summary.push([a,b]), T = (name, head, rows) => { if(rows.length) model.tables.push({name, head, rows}); };
+  S('সময়কাল', rangeLbl); S('রিপোর্ট তৈরির সময়', exNow());
+  S('মোট স্টক মূল্য (ক্রয়মূল্যে, এখন)', money(st.cost)); S('মোট স্টক মূল্য (বিক্রয়মূল্যে, এখন)', money(st.retail)); S('স্টকে আছে এমন পণ্য', String(st.count));
+  S('মোট বিক্রয় (ডেলিভারড)', money(sales)); S('মোট ক্রয়', money(buy)); S('মোট খরচ', money(expT)); S('মোট আয় (কমিশন ইত্যাদি)', money(incT));
+  S('নিট প্রফিট', money(net)); S('কাস্টমারের মোট বকেয়া (এখন)', money(custDue)); S('সরবরাহকারীর মোট বকেয়া (এখন)', money(supDue)); S('মোট মূলধন (বিনিয়োগ − উত্তোলন)', money(capital));
+  T('মাসভিত্তিক হিসাব', ['মাস','বিক্রয়','ক্রয়মূল্য (COGS)','গ্রস প্রফিট','অন্য আয়','খরচ','নিট প্রফিট','মাস শেষের স্টক মূল্য','অবস্থা'],
+    md.map(d => [monthLabel(d.month), money(d.revenue), money(d.cogs), money(d.gross), money(d.otherIncome), money(d.expenses), money(d.net), money(d.closeVal), d.locked ? 'লক' : 'খোলা']));
+  T('পণ্য ও স্টক (এখনকার অবস্থা)', ['আইডি','পণ্য','ক্যাটাগরি','একক','স্টক','ক্রয়মূল্য','বিক্রয়মূল্য','স্টক মূল্য (ক্রয়)'],
+    CACHE.products.map(p => [p.id, p.name, p.category||'', p.unit||'কেজি', String(r3(p.stock||0)), money(p.cost||0), money(p.retail||0), money(r2(Math.max(0,Number(p.stock||0))*Number(p.cost||0)))]));
+  T('বিক্রয় (অর্ডার)', ['তারিখ','অর্ডার','কাস্টমার','মোবাইল','মূল্য তালিকা','অবস্থা','মোট','পরিশোধিত','বকেয়া'],
+    orders.map(o => [o.date, o.id, o.customerName||'', o.phone||'', PRICE_LISTS[o.priceList]||'খুচরা', o.status, money(o.total||0), money(o.paidAmount||0), money(orderDue(o))]));
+  if(FR_LINES){
+    const rows = []; orders.forEach(o => orderItems(o).forEach(it => { const p = CACHE.products.find(x => x.id===it.productId); rows.push([o.date, o.id, o.customerName||'', pn(it.productId), fmtItem(it, p), money(it.unitPrice), lineDisc(it)>0 ? money(lineDisc(it)) : '', lineSur(it)>0 ? money(lineSur(it)) : '', money(lineAmt(it))]); }));
+    T('বিক্রয়ের পণ্যভিত্তিক লাইন', ['তারিখ','অর্ডার','কাস্টমার','পণ্য','পরিমাণ','একক মূল্য','ছাড়','বাড়তি','লাইন মোট'], rows);
+  }
+  T('ক্রয়', ['তারিখ','আইডি','ভাউচার নং','সরবরাহকারী','পণ্য','পরিমাণ','মোট খরচ','পেমেন্ট','পরিশোধিত','বকেয়া'],
+    purchases.map(p => { const pr = CACHE.products.find(x => x.id===p.productId); return [p.date, p.id, p.voucherNo||'', p.supplier||'', p.productName||pn(p.productId), `${p.qty} ${pr?pr.unit||'কেজি':''}`, money(p.totalCost||0), p.paymentStatus==='Paid'?'পরিশোধিত':'বকেয়া', money(p.paidAmount||0), money(purchaseDue(p))]; }));
+  T('খরচ ও আয়', ['তারিখ','আইডি','ধরন','ক্যাটাগরি','ভাউচার নং','পরিমাণ','মাধ্যম','অনুমোদনকারী / উৎস'],
+    exps.map(e => [e.date, e.id, e.kind==='income' ? 'আয়' : 'খরচ', e.category||'', e.voucherNo||'', money(e.amount||0), e.method||'', e.approvedBy||'']));
+  T('রিটার্ন', ['তারিখ','অর্ডার','কাস্টমার','পণ্য','পরিমাণ','ফেরত টাকা','কারণ'], rets.map(r => [r.date, r.orderId, r.customerName||'', pn(r.productId), String(r.qty), money(r.refundAmount||0), r.reason||'']));
+  const cd = {}; CACHE.orders.filter(o => o.status!=='Cancelled' && orderDue(o)>0).forEach(o => { const k = (o.customerName||'—') + '|' + (o.phone||''); const a = cd[k] || (cd[k] = {name:o.customerName||'—', phone:o.phone||'', n:0, due:0}); a.n++; a.due += orderDue(o); });
+  T('কাস্টমারের বকেয়া (এখনকার, সব সময়ের)', ['কাস্টমার','মোবাইল','অর্ডার সংখ্যা','মোট বকেয়া'], Object.values(cd).sort((a,b) => b.due-a.due).map(a => [a.name, a.phone, String(a.n), money(r2(a.due))]));
+  const sd = {}; CACHE.purchases.filter(p => purchaseDue(p)>0).forEach(p => { const k = p.supplier||'—'; const a = sd[k] || (sd[k] = {name:k, n:0, due:0}); a.n++; a.due += purchaseDue(p); });
+  T('সরবরাহকারীর বকেয়া (এখনকার, সব সময়ের)', ['সরবরাহকারী','ক্রয় সংখ্যা','মোট বকেয়া'], Object.values(sd).sort((a,b) => b.due-a.due).map(a => [a.name, String(a.n), money(r2(a.due))]));
+  const dr = []; orders.filter(o => o.status!=='Cancelled').forEach(o => orderItems(o).forEach(it => { const dd = lineDisc(it), sx = lineSur(it); if(dd>0 || sx>0) dr.push([o.date, o.id, o.customerName||'', pn(it.productId), dd>0?money(dd):'', sx>0?money(sx):'']); }));
+  T('ছাড় ও বাড়তি (পণ্যভিত্তিক)', ['তারিখ','অর্ডার','কাস্টমার','পণ্য','ছাড়','বাড়তি'], dr);
+  T('বিনিয়োগ / উত্তোলন', ['তারিখ','আইডি','ধরন','পরিমাণ','নোট'], invs.map(x => [x.date, x.id, x.type==='out' ? 'উত্তোলন' : 'বিনিয়োগ', money(x.amount||0), x.note||'']));
+  return model;
+}
+function frSetMonth(v){ FR_MONTH = v; }
+function frSetLines(v){ FR_LINES = !!v; }
+function frBusy(msg){ const el = document.getElementById('frBusy'); if(el) el.textContent = msg||''; }
+async function fullReportPdf(){
+  if(!isAdmin()){ alert('শুধু অ্যাডমিন করতে পারবেন'); return; }
+  try{ frBusy('PDF তৈরি হচ্ছে… একটু সময় লাগতে পারে'); await new Promise(r => setTimeout(r, 50));
+    const m = fullReportModel(), blob = await exRenderPdf(m); lfSaveBlob(blob, 'Avera-Mart-সম্পূর্ণ-হিসাব-' + (FR_MONTH==='all'?'সব-সময়':FR_MONTH) + '-' + todayStr() + '.pdf'); frBusy('✅ PDF তৈরি হয়েছে');
+  }catch(e){ frBusy(''); alert('PDF তৈরি হয়নি: ' + (e.message||e)); }
+}
+function fullReportExcel(){
+  if(!isAdmin()){ alert('শুধু অ্যাডমিন করতে পারবেন'); return; }
+  if(typeof XLSX==='undefined'){ alert('Excel লাইব্রেরি লোড হয়নি — ইন্টারনেট চেক করে পেইজ রিফ্রেশ করুন।'); return; }
+  const m = fullReportModel(), wb = XLSX.utils.book_new(), used = new Set();
+  const uniq = n => { const b = (String(n).replace(/[\[\]:*?\/\\]/g,' ').trim().slice(0,26) || 'Sheet'); let x = b, i = 2; while(used.has(x.toLowerCase())) x = b + ' ' + (i++); used.add(x.toLowerCase()); return x; };
+  const widths = aoa => { const w = []; aoa.forEach(r => r.forEach((v,i) => { const l = Math.min(48, String(v).split('\n').reduce((a,b) => Math.max(a,b.length), 0) + 2); w[i] = Math.max(w[i]||8, l); })); return w.map(x => ({wch:x})); };
+  const sa = [['Avera Mart — ' + m.title], [m.when], []].concat(m.summary.map(r => [r[0], exVal(r[1])])), sw = XLSX.utils.aoa_to_sheet(sa); sw['!cols'] = widths(sa); XLSX.utils.book_append_sheet(wb, sw, uniq('সারসংক্ষেপ'));
+  m.tables.forEach(t => { const aoa = [t.head].concat(t.rows.map(r => r.map(exVal))), ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = widths(aoa); XLSX.utils.book_append_sheet(wb, ws, uniq(t.name)); });
+  XLSX.writeFile(wb, 'Avera-Mart-সম্পূর্ণ-হিসাব-' + (FR_MONTH==='all'?'সব-সময়':FR_MONTH) + '-' + todayStr() + '.xlsx');
+}
+function fullReportPanelHtml(){
+  return `<div class="panel">
+    <h3>📄 সম্পূর্ণ হিসাব রিপোর্ট (PDF / Excel)</h3>
+    <p style="font-size:12.5px;color:var(--text-muted);">স্টক, পণ্য, বিক্রয়, ক্রয়, খরচ ও আয়, রিটার্ন, বকেয়া, ছাড় ও বাড়তি, বিনিয়োগ, মাসভিত্তিক লাভ-ক্ষতি — সব একসাথে এক ফাইলে। পড়া ও জমিয়ে রাখার জন্য। <b>ডেটা ফেরত আনার ব্যাকআপ হলো উপরের "ব্যাকআপ ডাউনলোড" (ফাইল)</b>; এই রিপোর্ট থেকে ডেটা ফেরত আনা যায় না, তাই দুটোই রাখুন।</p>
+    <div class="form-field" style="max-width:300px;"><label>সময়কাল</label><select onchange="frSetMonth(this.value)" style="padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);">${monthOptionsHtml(FR_MONTH, true)}</select></div>
+    <label style="display:flex;gap:8px;align-items:center;font-size:13.5px;margin:10px 0;"><input type="checkbox" ${FR_LINES?'checked':''} onchange="frSetLines(this.checked)"> বিক্রয়ের পণ্যভিত্তিক লাইনসহ (ফাইল বড় হয়)</label>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-primary btn-sm" onclick="fullReportPdf()">📄 PDF ডাউনলোড</button><button class="btn btn-outline btn-sm" onclick="fullReportExcel()">📊 Excel ডাউনলোড</button></div>
+    <p id="frBusy" style="font-size:13px;color:var(--navy);min-height:18px;margin-top:6px;"></p>
+  </div>`;
+}
 function stockCheckData(){
   const lastBuy = {};
   CACHE.purchases.slice().sort((a,b)=> String(a.date).localeCompare(String(b.date))).forEach(pu => { if(pu.productId && Number(pu.qty)>0) lastBuy[pu.productId] = Number(pu.totalCost||0)/Number(pu.qty); });
@@ -3968,6 +4047,7 @@ function renderSettings(){
         </div>
         <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="saveBusinessAddress()">সংরক্ষণ করুন</button>
       </div>
+      ${fullReportPanelHtml()}
       <div class="panel">
         <h3>সার্ভার ব্যাকআপ (স্বয়ংক্রিয়)</h3>
         <p style="font-size:12.5px;color:var(--text-muted);">প্রতিদিন একবার সব ডেটার কপি সার্ভারের আলাদা জায়গায় জমা হয়। ৬০ দিনের দৈনিক কপি এবং প্রতি মাসের একটি কপি চিরকাল থাকে।</p>
@@ -4202,7 +4282,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৪.২';
+const APP_VERSION = '৪.৩';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{
