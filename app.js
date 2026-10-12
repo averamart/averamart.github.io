@@ -4202,7 +4202,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৪.১';
+const APP_VERSION = '৪.২';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{
@@ -4228,3 +4228,27 @@ async function forceRefreshApp(){
   location.replace(location.pathname + '?v=' + Date.now());   // নতুন ঠিকানা — ব্রাউজারের জমানো কপি এড়িয়ে সরাসরি নতুন ফাইল আনে
 }
 document.addEventListener('DOMContentLoaded', showAppVersion);
+
+/* ============================================================
+   মোবাইল তালিকা: প্রতিটি তথ্য-সারি ছোট স্ক্রিনে কার্ড হয় (কলামের নাম data-label হিসেবে বসে)
+   ============================================================ */
+let RT_T = 0;
+function rtApply(){
+  const root = document.getElementById('pageContent'); if(!root) return;
+  root.querySelectorAll('table').forEach(t => {
+    if(t.closest('#invoiceBox,.no-rt')) return;
+    const th = t.tHead; if(!th || !th.rows.length) return;
+    const heads = [...th.rows[0].cells].map(c => c.textContent.replace(/\s+/g,' ').trim());
+    t.classList.add('rt');
+    [...t.tBodies].forEach(tb => [...tb.rows].forEach(r => [...r.cells].forEach((td,i) => {
+      if(td.colSpan>1){ td.classList.add('rt-span'); return; }
+      const h = heads[i] || ''; if(td.getAttribute('data-label')!==h) td.setAttribute('data-label', h);
+    })));
+  });
+}
+(function(){
+  const root = document.getElementById('pageContent'); if(!root || typeof MutationObserver==='undefined') return;
+  new MutationObserver(() => { cancelAnimationFrame(RT_T); RT_T = requestAnimationFrame(rtApply); }).observe(root, {childList:true, subtree:true});
+  rtApply();
+})();
+

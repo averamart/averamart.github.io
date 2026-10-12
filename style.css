@@ -316,3 +316,29 @@ select:disabled{opacity:.55;cursor:not-allowed;}
 .sg-item{padding:9px 12px;border-bottom:1px solid #EEF1F5;font-size:14px;cursor:pointer;line-height:1.45;}
 .sg-item:last-child{border-bottom:none;}
 .sg-item:hover,.sg-item:active{background:#EAF2FA;}
+
+/* ===== মোবাইল-বান্ধব: কোনো পেইজ ডানে-বামে সরবে না; তালিকা কার্ড হয়ে যায় ===== */
+html,body{max-width:100%;}
+body{overflow-x:hidden;overscroll-behavior-x:none;}
+.grid>*,.grid-2>*,.grid-4>*,.form-grid>*,.panel,.panel>*{min-width:0;}
+.page-content{min-width:0;overflow-wrap:anywhere;}
+input,select,textarea{max-width:100%;box-sizing:border-box;min-width:0;}
+.table-wrap{max-width:100%;}
+@media(max-width:640px){
+  .page-content{padding:12px;}
+  .panel{padding:12px;}
+  table.rt{min-width:0 !important;width:100%;border-collapse:separate;border-spacing:0;}
+  .table-wrap table.rt{min-width:0 !important;}
+  table.rt thead{display:none;}
+  table.rt,table.rt tbody,table.rt tr,table.rt td{display:block;width:100%;box-sizing:border-box;}
+  table.rt tr{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:8px 12px;margin-bottom:10px;box-shadow:0 1px 3px rgba(18,38,63,.06);}
+  table.rt td{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:5px 0 !important;border:none !important;text-align:right;background:transparent !important;overflow-wrap:anywhere;}
+  table.rt td::before{content:attr(data-label);font-weight:600;color:var(--text-muted);font-size:12.5px;flex:none;max-width:44%;text-align:left;}
+  table.rt td[data-label=""]::before{display:none;}
+  table.rt td[data-label=""]{justify-content:flex-end;}
+  table.rt td.rt-span{justify-content:center;text-align:center;}
+  table.rt td.rt-span::before{display:none;}
+  table.rt td .icon-btn{margin-left:6px;}
+  table.rt tr.row-hl{background:#FFF6C9;}
+  .table-wrap{overflow-x:visible;}
+}
