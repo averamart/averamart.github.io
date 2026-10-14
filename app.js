@@ -1822,7 +1822,7 @@ function stockCheckData(){
     negative: rows.filter(r => r.st<0),
     belowCost: rows.filter(r => r.st>0 && r.retail>0 && r.cost>0 && r.retail<r.cost),
     hiddenStock: rows.filter(r => r.st>0 && r.p.hidden),
-    drift: rows.filter(r => r.st>0 && r.last>0 && r.cost>0 && Math.abs(r.last-r.cost)/r.cost > 0.05)
+    drift: rows.filter(r => { const av = avgCostOf(CACHE.purchases, r.p.id); return r.st>0 && av!==null && r.cost>0 && Math.abs(av-r.cost)/r.cost > 0.001; })
   };
   // ---- ক্রয় খাতা থেকে স্টক মূল্যে পৌঁছানোর ধাপ (bridge) ----
   const idx = moveIndex();
@@ -1883,7 +1883,7 @@ function renderStockCheck(){
     anomalyBlock('ঋণাত্মক (মাইনাস) স্টক', A.negative, 'বিক্রি হয়েছে কিন্তু ক্রয় এন্ট্রি দেওয়া হয়নি — ক্রয় খাতায় এন্ট্রি দিন।') +
     anomalyBlock('বিক্রয়মূল্য ক্রয়মূল্যের চেয়ে কম', A.belowCost, 'দাম উল্টো বসে গেছে কিনা দেখুন।') +
     anomalyBlock('লুকানো অবস্থায় স্টক আছে', A.hiddenStock, 'এগুলোর মূল্য মোটের মধ্যে ধরা আছে, কিন্তু ইনভেন্টরি রিপোর্টের তালিকায় দেখা যায় না।') +
-    anomalyBlock('পণ্যের ক্রয়মূল্য আর সর্বশেষ ক্রয়ের গড় খরচ মিলছে না (৫%-এর বেশি পার্থক্য)', A.drift, 'ভাউচারে দাম বদলেছে কিন্তু পণ্য তালিকায় ক্রয়মূল্য পুরোনো রয়ে গেছে — এতে স্টকের মূল্য ভাউচারের সাথে মিলবে না। পণ্য তালিকায় ক্রয়মূল্য আপডেট করুন।');
+    anomalyBlock('পণ্যের ক্রয়মূল্য ভাউচারের গড় দামের সাথে মিলছে না', A.drift, 'ক্রয়মূল্য সাধারণত নিজে থেকেই ভাউচার গড় অনুযায়ী ঠিক থাকে; হাতে বদলালে বা পুরোনো এন্ট্রির পরে এমন হতে পারে। <button class="btn btn-primary btn-sm" style="margin-top:6px;" onclick="applyAvgCostsAll()">🔄 এখনই ভাউচার গড় অনুযায়ী ঠিক করুন</button>')
   document.getElementById('pageContent').innerHTML = `
     <div class="grid grid-2" style="margin-bottom:16px;">
       <div class="stat-card"><div class="label">মোট মজুত মালের মূল্য — ক্রয়মূল্যে</div><div class="value">${money(d.totCost)}</div><div class="sub">স্টকে আছে ${d.count}টি পণ্য</div></div>
@@ -2412,7 +2412,7 @@ function renderOrders(){
   let rows = orders.slice().reverse().map(o => `
     <tr>
       <td>${o.id} ${editedBadge(o)}</td><td>${o.date}</td>
-      <td>${esc(o.customerName)}${o.priceList && o.priceList!=='retail' ? ' <span class="badge" style="background:#E9E4FA;color:#4B2FA8;">'+(PRICE_LISTS[o.priceList]||'')+'</span>' : ''}<br><span class="muted-cell">${esc(o.phone)}</span></td>
+      <td>${esc(o.customerName)}${orderListBadge(o)}<br><span class="muted-cell">${esc(o.phone)}</span></td>
       <td>${itemsSummary(o)}</td>
       ${canSeeMoney ? `<td class="cell-num">${money(o.total)}</td>` : ''}
       <td class="cell-center">
@@ -2491,7 +2491,7 @@ function openOrderForm(id, from){
   ORDER_CART = o ? orderItems(o).map(it=>{
     const p = CACHE.products.find(x=>x.id===it.productId);
     const m = unitOptions(p).find(o=>o.label===it.du);
-    return {...it, mode: m ? m.key : 'base'};
+    return {...it, mode: m ? m.key : 'base', pl: it.pl || ORDER_PL};
   }) : [];
 
   const html = `
@@ -2503,7 +2503,7 @@ function openOrderForm(id, from){
         <div class="form-field"><label>কাস্টমার নাম</label><input id="o_name" value="${o?esc(o.customerName):''}"></div>
         <div class="form-field"><label>মোবাইল নম্বর</label><input id="o_phone" value="${o?esc(o.phone):''}"></div>
         <div class="form-field span-2"><label>ডেলিভারি ঠিকানা</label><input id="o_addr" value="${o?esc(o.address):''}"></div>
-        <div class="form-field"><label>মূল্য তালিকা (ক্রেতার ধরন)</label><select id="o_pl" onchange="onPriceListChange(this.value)" style="padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);">${Object.keys(PRICE_LISTS).map(k => `<option value="${k}" ${ORDER_PL===k?'selected':''}>${PRICE_LISTS[k]}</option>`).join('')}</select></div>
+        <div class="form-field"><label>সব পণ্যের মূল্য তালিকা (প্রতিটি পণ্যের আলাদাও বাছা যায়)</label><select id="o_pl" onchange="onPriceListChange(this.value)" style="padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);">${Object.keys(PRICE_LISTS).map(k => `<option value="${k}" ${ORDER_PL===k?'selected':''}>${PRICE_LISTS[k]}</option>`).join('')}</select></div>
         <div class="form-field"><label>ডেলিভারি চার্জ (৳)</label><input id="o_delivery" type="number" value="${o?o.deliveryCharge:0}" oninput="renderCart()"></div>
         <div class="form-field"><label>ছাড় / ডিসকাউন্ট (৳)</label><input id="o_discount" type="number" value="${o?(o.discount||0):0}" oninput="renderCart()"></div>
         <div class="form-field"><label>অর্ডার সোর্স</label>
@@ -2572,7 +2572,7 @@ function addToCart(productId){
   if(!p) return;
   const existing = ORDER_CART.find(it=>it.productId===productId);
   if(existing){ existing.qty = Number(existing.qty) + 1; }
-  else { const lp = unitListPrice(p, ORDER_PL); ORDER_CART.push({productId, qty:1, unitPrice: lp, standardPrice: lp, discType:'amt', discVal:0, surType:'amt', surVal:0}); }
+  else { const lp = unitListPrice(p, ORDER_PL); ORDER_CART.push({productId, qty:1, unitPrice: lp, standardPrice: lp, pl: ORDER_PL, discType:'amt', discVal:0, surType:'amt', surVal:0}); }
   document.getElementById('o_search').value = '';
   document.getElementById('searchResults').innerHTML = '';
   document.getElementById('searchResults').classList.remove('open');
@@ -2622,10 +2622,21 @@ function updateCartDisc(productId, key, val){
 }
 function onPriceListChange(v){
   const old = ORDER_PL;
-  if(ORDER_CART.length && !confirm('কার্টের সব পণ্যের দাম "' + PRICE_LISTS[v] + '" মূল্য তালিকা অনুযায়ী বদলাবে (এই পণ্যে ছাড়ের ঘর অপরিবর্তিত থাকবে)। এগিয়ে যাবেন?')){ const el = document.getElementById('o_pl'); if(el) el.value = old; return; }
+  if(ORDER_CART.length && !confirm('কার্টের সব পণ্যের দাম "' + PRICE_LISTS[v] + '" মূল্য তালিকা অনুযায়ী বদলাবে (প্রতিটি পণ্যের আলাদা বাছাই মুছে যাবে; ছাড় অপরিবর্তিত থাকবে)। এগিয়ে যাবেন?')){ const el = document.getElementById('o_pl'); if(el) el.value = old; return; }
   ORDER_PL = v;
-  ORDER_CART.forEach(it => { const p = CACHE.products.find(x => x.id===it.productId); if(!p) return; const lp = unitListPrice(p, v); it.unitPrice = lp; it.standardPrice = lp; });
+  ORDER_CART.forEach(it => { const p = CACHE.products.find(x => x.id===it.productId); if(!p) return; const lp = unitListPrice(p, v); it.unitPrice = lp; it.standardPrice = lp; it.pl = v; });
   renderCart();
+}
+function updateCartPL(productId, v){
+  const it = ORDER_CART.find(x => x.productId===productId); if(!it) return;
+  const p = CACHE.products.find(x => x.id===productId); if(!p) return;
+  const lp = unitListPrice(p, v); it.pl = v; it.unitPrice = lp; it.standardPrice = lp; renderCart();
+}
+function orderLists(o){ const set = new Set(orderItems(o).map(it => (it.pl && PRICE_LISTS[it.pl]) ? it.pl : ((o.priceList && PRICE_LISTS[o.priceList]) ? o.priceList : 'retail'))); return [...set]; }
+function orderListBadge(o){
+  const ls = orderLists(o); if(ls.length===1 && ls[0]==='retail') return '';
+  const t = ls.length>1 ? 'মিশ্র তালিকা' : PRICE_LISTS[ls[0]];
+  return ' <span class="badge" style="background:#E9E4FA;color:#4B2FA8;">' + t + '</span>';
 }
 function updateCartSur(productId, key, val){
   const it = ORDER_CART.find(x=>x.productId===productId); if(!it) return;
@@ -2657,7 +2668,7 @@ function renderCart(){
         <td>${esc(p?p.name:'—')}</td>
         <td class="cell-center"><input type="number" min="0.001" step="any" value="${r3(it.qty*optByKey(p,it.mode).factor)}" style="width:75px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartQty('${it.productId}', this.value)">
           ${unitSelectHtml(p, it.mode||'base', `onchange="setCartUnitMode('${it.productId}', this.value)"`)}</td>
-        <td class="cell-center"><input type="number" min="0" value="${it.unitPrice}" style="width:80px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartPrice('${it.productId}', this.value)">${(it.standardPrice!=null && Number(it.unitPrice)<Number(it.standardPrice)) ? '<br><span style="font-size:11px;color:#B3261E;">দাম কমানো — ইনভয়েসে ছাড় দেখাবে না। "ছাড়" ঘর ব্যবহার করুন।</span>' : ''}</td>
+        <td class="cell-center"><select onchange="updateCartPL('${it.productId}', this.value)" style="padding:4px;border:1px solid var(--border);border-radius:6px;background:#fff;font-size:12px;margin-bottom:4px;">${Object.keys(PRICE_LISTS).map(k => `<option value="${k}" ${(it.pl||ORDER_PL)===k?'selected':''}>${PRICE_LISTS[k]}</option>`).join('')}</select><br><input type="number" min="0" value="${it.unitPrice}" style="width:80px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartPrice('${it.productId}', this.value)">${(it.standardPrice!=null && Number(it.unitPrice)<Number(it.standardPrice)) ? '<br><span style="font-size:11px;color:#B3261E;">দাম কমানো — ইনভয়েসে ছাড় দেখাবে না। "ছাড়" ঘর ব্যবহার করুন।</span>' : ''}</td>
         <td class="cell-center"><input type="number" min="0" step="any" value="${it.discVal||''}" placeholder="০" style="width:70px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartDisc('${it.productId}','val',this.value)">
           <select onchange="updateCartDisc('${it.productId}','type',this.value)" style="padding:5px;border:1px solid var(--border);border-radius:6px;background:#fff;"><option value="amt" ${it.discType!=='pct'?'selected':''}>৳</option><option value="pct" ${it.discType==='pct'?'selected':''}>%</option></select></td>
         <td class="cell-center"><input type="number" min="0" step="any" value="${it.surVal||''}" placeholder="০" style="width:70px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartSur('${it.productId}','val',this.value)">
@@ -2696,7 +2707,7 @@ function saveOrder(id){
       const o = optByKey(p, it.mode);
       return {productId:it.productId, qty:Number(it.qty), unitPrice:Number(it.unitPrice), standardPrice:Number(it.standardPrice!=null?it.standardPrice:it.unitPrice),
         lineDiscount: lineDisc(it), discType: it.discType==='pct'?'pct':'amt', discVal: Number(it.discVal)||0,
-        lineSurcharge: lineSur(it), surType: it.surType==='pct'?'pct':'amt', surVal: Number(it.surVal)||0,
+        lineSurcharge: lineSur(it), surType: it.surType==='pct'?'pct':'amt', surVal: Number(it.surVal)||0, pl: it.pl || ORDER_PL,
         dq: r3(Number(it.qty)*o.factor), du: o.label};
     }),
     discount,
@@ -3833,17 +3844,19 @@ function deleteInvestment(id){
 function priceListPanelHtml(m){
   const g = {};
   CACHE.orders.filter(o => o.status==='Delivered' && mOf(o.date)===m).forEach(o => {
-    const k = o.priceList && PRICE_LISTS[o.priceList] ? o.priceList : 'retail', a = g[k] || (g[k] = {n:0, rev:0, cogs:0});
-    a.n++; a.rev += Number(o.total||0);
-    orderItems(o).forEach(it => { const p = CACHE.products.find(x => x.id===it.productId); a.cogs += (p ? Number(p.cost||0) : 0) * Number(it.qty||0); });
+    orderItems(o).forEach(it => {
+      const k = (it.pl && PRICE_LISTS[it.pl]) ? it.pl : ((o.priceList && PRICE_LISTS[o.priceList]) ? o.priceList : 'retail');
+      const a = g[k] || (g[k] = {ords:new Set(), rev:0, cogs:0}); const p = CACHE.products.find(x => x.id===it.productId);
+      a.ords.add(o.id); a.rev += lineAmt(it); a.cogs += (p ? Number(p.cost||0) : 0) * Number(it.qty||0);
+    });
   });
   const keys = Object.keys(PRICE_LISTS).filter(k => g[k]); if(!keys.length) return '';
-  const tot = keys.reduce((t,k) => ({n:t.n+g[k].n, rev:t.rev+g[k].rev, cogs:t.cogs+g[k].cogs}), {n:0,rev:0,cogs:0});
-  const row = (name, a) => `<tr><td>${name}</td><td class="cell-num">${a.n}</td><td class="cell-num">${money(r2(a.rev))}</td><td class="cell-num">${money(r2(a.cogs))}</td><td class="cell-num"><b>${money(r2(a.rev-a.cogs))}</b></td><td class="cell-num">${a.rev>0 ? ((a.rev-a.cogs)/a.rev*100).toFixed(1)+'%' : '—'}</td></tr>`;
-  return `<div class="panel"><h3>মূল্য তালিকা অনুযায়ী বিক্রয় ও লাভ — ${monthLabel(m)}</h3>
+  const tot = keys.reduce((t,k) => ({n:t.n+g[k].ords.size, rev:t.rev+g[k].rev, cogs:t.cogs+g[k].cogs}), {n:0,rev:0,cogs:0});
+  const row = (name, n, a) => `<tr><td>${name}</td><td class="cell-num">${n}</td><td class="cell-num">${money(r2(a.rev))}</td><td class="cell-num">${money(r2(a.cogs))}</td><td class="cell-num"><b>${money(r2(a.rev-a.cogs))}</b></td><td class="cell-num">${a.rev>0 ? ((a.rev-a.cogs)/a.rev*100).toFixed(1)+'%' : '—'}</td></tr>`;
+  return `<div class="panel"><h3>মূল্য তালিকা অনুযায়ী বিক্রয় ও লাভ (পণ্য ধরে) — ${monthLabel(m)}</h3>
     <div class="table-wrap"><table><thead><tr><th>তালিকা</th><th>অর্ডার</th><th>বিক্রয়</th><th>ক্রয়মূল্য</th><th>গ্রস লাভ</th><th>মার্জিন</th></tr></thead><tbody>
-    ${keys.map(k => row(PRICE_LISTS[k], g[k])).join('')}${keys.length>1 ? row('<b>মোট</b>', tot) : ''}</tbody></table></div>
-    <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">গ্রস লাভ = বিক্রয় − ক্রয়মূল্য (খরচ ও কমিশনের আগে)। ডেলিভারড অর্ডার ধরা হয়েছে; ক্রয়মূল্য এখনকার ভাউচার গড়ে।</p></div>`;
+    ${keys.map(k => row(PRICE_LISTS[k], g[k].ords.size, g[k])).join('')}${keys.length>1 ? row('<b>মোট</b>', tot.n, tot) : ''}</tbody></table></div>
+    <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">প্রতিটি পণ্যের লাইন তার নিজের তালিকায় ধরা হয়েছে (ডেলিভারি চার্জ ও পুরো বিলের ছাড় বাদে)। একটা অর্ডারে একাধিক তালিকা থাকলে অর্ডারটি প্রতি তালিকায় গোনা হয়। ক্রয়মূল্য এখনকার ভাউচার গড়ে।</p></div>`;
 }
 function renderProfitLoss(){
   if(!monthsList().includes(VIEW_MONTH)) VIEW_MONTH = curMonth();
@@ -4282,7 +4295,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৪.৩';
+const APP_VERSION = '৪.৪';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{
