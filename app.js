@@ -167,7 +167,7 @@ function onCloudUpdate(){
     // live re-render current page so every device sees updates instantly
     const renderers = {
       dashboard: renderDashboard, products: renderProducts, orders: renderOrders,
-      purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck, leaflet: renderLeaflet, catalog: renderCatalog,
+      purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck, leaflet: renderLeaflet, catalog: renderCatalog, productsales: renderProductSales,
       invoice: renderInvoice, settings: renderSettings
     };
     (renderers[currentPage] || renderDashboard)();
@@ -477,6 +477,7 @@ const NAV_ITEMS = [
   {key:'orders', label:'অর্ডার ও সেলস', icon:'🛍️', roles:['admin','manager','delivery']},
   {key:'leaflet', label:'অফার লিফলেট', icon:'📣', roles:['admin','manager']},
   {key:'catalog', label:'পণ্য ক্যাটালগ', icon:'📖', roles:['admin','manager']},
+  {key:'productsales', label:'পণ্য বিক্রয় রিপোর্ট', icon:'📈', roles:['admin','manager']},
   {key:'purchases', label:'ক্রয় খাতা', icon:'🛒', roles:['admin','manager']},
   {key:'expenses', label:'খরচ খাতা', icon:'💸', roles:['admin','manager']},
   {key:'dues', label:'বকেয়া হিসাব', icon:'📒', roles:['admin','manager']},
@@ -525,7 +526,7 @@ function go(page){
   { const eb = document.getElementById('exportBtns'); if(eb) eb.classList.toggle('hidden', session.role==='delivery'); }
   const renderers = {
     dashboard: renderDashboard, products: renderProducts, orders: renderOrders,
-    purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck, leaflet: renderLeaflet, catalog: renderCatalog,
+    purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck, leaflet: renderLeaflet, catalog: renderCatalog, productsales: renderProductSales,
     invoice: renderInvoice, settings: renderSettings
   };
   (renderers[page] || renderDashboard)();
@@ -1760,6 +1761,8 @@ function fullReportModel(){
     md.map(d => [monthLabel(d.month), money(d.revenue), money(d.cogs), money(d.gross), money(d.otherIncome), money(d.expenses), money(d.net), money(d.closeVal), d.locked ? 'লক' : 'খোলা']));
   T('পণ্য ও স্টক (এখনকার অবস্থা)', ['আইডি','পণ্য','ক্যাটাগরি','একক','স্টক','ক্রয়মূল্য','বিক্রয়মূল্য','স্টক মূল্য (ক্রয়)'],
     CACHE.products.map(p => [p.id, p.name, p.category||'', p.unit||'কেজি', String(r3(p.stock||0)), money(p.cost||0), money(p.retail||0), money(r2(Math.max(0,Number(p.stock||0))*Number(p.cost||0)))]));
+  { const psd = Object.values(psData(m==='all' ? '0000-01-01' : m+'-01', m==='all' ? '9999-12-31' : m+'-31')).sort((a,b) => b.qty-a.qty);
+    T('পণ্যভিত্তিক বিক্রয় (ডেলিভারড)', ['পণ্য','ক্যাটাগরি','বিক্রিত পরিমাণ','অর্ডার','বিক্রয়','গ্রস লাভ'], psd.map(a => [a.name, a.cat, psQty(a), String(a.ords.size), money(r2(a.rev)), money(r2(a.rev-a.cogs))])); }
   T('বিক্রয় (অর্ডার)', ['তারিখ','অর্ডার','কাস্টমার','মোবাইল','মূল্য তালিকা','অবস্থা','মোট','পরিশোধিত','বকেয়া'],
     orders.map(o => [o.date, o.id, o.customerName||'', o.phone||'', PRICE_LISTS[o.priceList]||'খুচরা', o.status, money(o.total||0), money(o.paidAmount||0), money(orderDue(o))]));
   if(FR_LINES){
@@ -1808,6 +1811,99 @@ function fullReportPanelHtml(){
     <div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-primary btn-sm" onclick="fullReportPdf()">📄 PDF ডাউনলোড</button><button class="btn btn-outline btn-sm" onclick="fullReportExcel()">📊 Excel ডাউনলোড</button></div>
     <p id="frBusy" style="font-size:13px;color:var(--navy);min-height:18px;margin-top:6px;"></p>
   </div>`;
+}
+/* ============================================================
+   PRODUCT SALES REPORT — কোন মাসে/তারিখে কোন পণ্য কতটি বিক্রি (ডেলিভারড অর্ডার, রিটার্ন বাদে)
+   ============================================================ */
+let PS = null;
+function psInit(){ if(PS) return; const cm = curMonth(); PS = {month:cm, from:cm+'-01', to:todayStr(), custom:false, q:'', sort:'qty', zero:false, detail:''}; }
+function psData(from, to){
+  const prod = {};
+  CACHE.orders.filter(o => o.status==='Delivered' && o.date>=from && o.date<=to).forEach(o => {
+    orderItems(o).forEach(it => {
+      const p = CACHE.products.find(x => x.id===it.productId);
+      const a = prod[it.productId] || (prod[it.productId] = {id:it.productId, p, name:p ? p.name : '(মুছে ফেলা পণ্য)', cat:p ? (p.category||'') : '', qty:0, rev:0, disc:0, cogs:0, ords:new Set(), lines:[]});
+      const q = Number(it.qty||0), amt = lineAmt(it);
+      a.qty += q; a.rev += amt; a.disc += lineDisc(it); a.cogs += (p ? Number(p.cost||0) : 0)*q; a.ords.add(o.id);
+      a.lines.push({date:o.date, order:o.id, customer:o.customerName||'', fmt:fmtItem(it,p), price:Number(it.unitPrice), disc:lineDisc(it), sur:lineSur(it), amt});
+    });
+  });
+  return prod;
+}
+function psQty(a){ return a.p ? fmtStock(a.qty, a.p) : String(r3(a.qty)); }
+function psSetMonth(v){
+  PS.custom = false;
+  if(v==='all'){ PS.month = 'all'; PS.from = '0000-01-01'; PS.to = '9999-12-31'; }
+  else { PS.month = v; PS.from = v + '-01'; PS.to = (v===curMonth()) ? todayStr() : v + '-31'; }
+  PS.detail = ''; psSyncDates(); psRefresh();
+}
+function psSetDate(which, v){ if(!v) return; PS[which] = v; PS.custom = true; PS.detail = ''; const sel = document.getElementById('psMonthSel'); if(sel) sel.innerHTML = monthOptionsHtml('', true) + '<option value="custom" selected>নিজের তারিখ</option>'; psRefresh(); }
+function psDv(v){ return (v==='0000-01-01' || v==='9999-12-31') ? '' : v; }
+function psSyncDates(){ const f = document.getElementById('psFrom'), t = document.getElementById('psTo'); if(f) f.value = psDv(PS.from); if(t) t.value = psDv(PS.to); }
+function psSetQ(v){ PS.q = v; psRefresh(); }
+function psSetSort(v){ PS.sort = v; psRefresh(); }
+function psSetZero(v){ PS.zero = !!v; psRefresh(); }
+function psDetail(pid){ PS.detail = (PS.detail===pid) ? '' : pid; psRefresh(); if(PS.detail){ const el = document.getElementById('psDetailBox'); if(el) el.scrollIntoView({behavior:'smooth', block:'start'}); } }
+function psMonthsMatrix(){
+  const ms = monthsList().filter(x => x <= curMonth()).slice(-6), mat = {};
+  CACHE.orders.filter(o => o.status==='Delivered' && ms.includes(mOf(o.date))).forEach(o => orderItems(o).forEach(it => { const a = mat[it.productId] || (mat[it.productId] = {}); const k = mOf(o.date); a[k] = (a[k]||0) + Number(it.qty||0); }));
+  return {ms, mat};
+}
+function psRefresh(){
+  const box = document.getElementById('psBody'); if(!box) return;
+  const admin = isAdmin(), data = psData(PS.from, PS.to), q = String(PS.q||'').trim();
+  let list = Object.values(data);
+  if(PS.zero){ CACHE.products.forEach(p => { if(!data[p.id] && Number(p.stock)>0 && !p.hidden) list.push({id:p.id, p, name:p.name, cat:p.category||'', qty:0, rev:0, disc:0, cogs:0, ords:new Set(), lines:[]}); }); }
+  if(q){ const toks = q.split(/\s+/).map(kk).filter(Boolean); list = list.filter(a => { const hay = kk(a.name) + '|' + kk(a.cat) + '|' + kk(a.id); return toks.every(t => hay.includes(t)); }); }
+  const cmp = {qty:(a,b) => b.qty-a.qty, rev:(a,b) => b.rev-a.rev, name:(a,b) => String(a.name).localeCompare(String(b.name),'bn'), slow:(a,b) => a.qty-b.qty};
+  list.sort(cmp[PS.sort] || cmp.qty);
+  const totRev = r2(list.reduce((t,a) => t + a.rev, 0)), totCogs = r2(list.reduce((t,a) => t + a.cogs, 0)), sold = list.filter(a => a.qty>0).length;
+  const ordSet = new Set(); list.forEach(a => a.ords.forEach(x => ordSet.add(x)));
+  const label = PS.custom ? `${PS.from==='0000-01-01' ? 'শুরু' : PS.from} থেকে ${PS.to==='9999-12-31' ? 'এখন পর্যন্ত' : PS.to}` : (PS.month==='all' ? 'সব সময়' : (PS.month===curMonth() ? monthLabel(PS.month) + ' (আজ পর্যন্ত)' : monthLabel(PS.month)));
+  const rows = list.map(a => `<tr>
+    <td>${esc(a.name)}</td><td>${esc(a.cat)}</td><td class="cell-num"><b>${a.qty>0 ? psQty(a) : '—'}</b></td><td class="cell-num">${a.ords.size||'—'}</td>
+    <td class="cell-num">${a.rev>0 ? money(r2(a.rev)) : '—'}</td>${admin ? `<td class="cell-num">${a.qty>0 ? money(r2(a.rev-a.cogs)) : '—'}</td>` : ''}
+    <td class="cell-num">${a.p ? fmtStock(a.p.stock, a.p) : '—'}</td>
+    <td class="cell-center">${a.lines.length ? `<button class="icon-btn" title="বিস্তারিত" onclick="psDetail('${a.id}')">🔍</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="empty-state">এই সময়ে কোনো বিক্রি নেই</td></tr>';
+  const dt = PS.detail ? data[PS.detail] : null;
+  const detailHtml = dt ? `<div class="panel" id="psDetailBox" style="border:2px solid var(--teal);"><div class="panel-head"><h3>${esc(dt.name)} — বিক্রির বিস্তারিত (${esc(label)})</h3><button class="btn btn-outline btn-sm" onclick="psDetail('${dt.id}')">✕ বন্ধ</button></div>
+    <p style="font-size:13px;margin:0 0 8px;">মোট বিক্রি <b>${psQty(dt)}</b> · ${dt.ords.size}টি অর্ডার · বিক্রয় <b>${money(r2(dt.rev))}</b>${dt.disc>0 ? ' · ছাড় ' + money(r2(dt.disc)) : ''}</p>
+    <div class="table-wrap"><table><thead><tr><th>তারিখ</th><th>অর্ডার</th><th>কাস্টমার</th><th>পরিমাণ</th><th>একক মূল্য</th><th>ছাড়</th><th>বাড়তি</th><th>মোট</th></tr></thead><tbody>
+    ${dt.lines.slice().sort((x,y) => x.date<y.date?1:-1).map(l => `<tr><td>${l.date}</td><td>${l.order}</td><td>${esc(l.customer)}</td><td class="cell-num">${esc(String(l.fmt))}</td><td class="cell-num">${money(l.price)}</td><td class="cell-num">${l.disc>0?money(l.disc):'—'}</td><td class="cell-num">${l.sur>0?money(l.sur):'—'}</td><td class="cell-num"><b>${money(l.amt)}</b></td></tr>`).join('')}</tbody></table></div></div>` : '';
+  const mm = psMonthsMatrix(), mrows = Object.keys(mm.mat).map(pid => ({pid, p:CACHE.products.find(x => x.id===pid), tot:mm.ms.reduce((t,k) => t + (mm.mat[pid][k]||0), 0)})).sort((a,b) => b.tot-a.tot).slice(0,60);
+  const matrixHtml = (mrows.length && mm.ms.length>1) ? `<div class="panel"><h3>মাস অনুযায়ী বিক্রি — পণ্য ধরে (শেষ ${mm.ms.length} মাস)</h3>
+    <div class="table-wrap"><table><thead><tr><th>পণ্য</th>${mm.ms.map(k => `<th>${monthLabel(k)}</th>`).join('')}<th>মোট</th></tr></thead><tbody>
+    ${mrows.map(r => `<tr><td>${esc(r.p ? r.p.name : '(মুছে ফেলা পণ্য)')}</td>${mm.ms.map(k => { const v = mm.mat[r.pid][k]||0; return `<td class="cell-num">${v ? (r.p ? fmtStock(v, r.p) : r3(v)) : '—'}</td>`; }).join('')}<td class="cell-num"><b>${r.p ? fmtStock(r.tot, r.p) : r3(r.tot)}</b></td></tr>`).join('')}</tbody></table></div>
+    <p class="muted-cell" style="font-size:12px;margin-top:6px;">সবচেয়ে বেশি বিক্রি হওয়া ৬০টি পণ্য দেখানো হয়েছে।</p></div>` : '';
+  box.innerHTML = `
+    <div class="grid grid-2" style="margin-bottom:12px;">
+      <div class="stat-card"><div class="label">বিক্রি হওয়া পণ্য (${esc(label)})</div><div class="value">${sold}টি</div><div class="sub">${ordSet.size}টি অর্ডার</div></div>
+      <div class="stat-card"><div class="label">মোট বিক্রয়</div><div class="value">${money(totRev)}</div>${admin ? `<div class="sub">গ্রস লাভ ${money(r2(totRev-totCogs))}</div>` : ''}</div>
+    </div>
+    <div class="panel"><h3>পণ্য ধরে বিক্রয় — ${esc(label)}</h3>
+      <div class="table-wrap"><table><thead><tr><th>পণ্য</th><th>ক্যাটাগরি</th><th>বিক্রিত পরিমাণ</th><th>অর্ডার</th><th>বিক্রয়</th>${admin?'<th>গ্রস লাভ</th>':''}<th>বর্তমান স্টক</th><th>বিস্তারিত</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">ডেলিভারড অর্ডার ধরা হয়েছে; রিটার্ন করা পরিমাণ বাদ। ${admin ? 'গ্রস লাভ = বিক্রয় − ক্রয়মূল্য (এখনকার ভাউচার গড়ে), খরচ ও কমিশনের আগে। ' : ''}"🔍" চাপলে কোন অর্ডারে কত বিক্রি হয়েছে দেখা যায়।</p></div>
+    ${detailHtml}${matrixHtml}`;
+}
+function renderProductSales(){
+  psInit();
+  document.getElementById('pageContent').innerHTML = `
+    <div class="panel">
+      <h3>পণ্য বিক্রয় রিপোর্ট</h3>
+      <p style="font-size:12.5px;color:var(--text-muted);">কোন মাসে বা কোন তারিখ থেকে তারিখ পর্যন্ত কোন পণ্য কতটি বিক্রি হয়েছে — মাসের শেষে বা মাঝের যেকোনো দিন দেখুন।</p>
+      <div class="form-grid">
+        <div class="form-field"><label>মাস</label><select id="psMonthSel" onchange="psSetMonth(this.value)" style="padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);">${monthOptionsHtml(PS.custom ? '' : PS.month, true)}${PS.custom ? '<option value="custom" selected>নিজের তারিখ</option>' : ''}</select></div>
+        <div class="form-field"><label>তারিখ থেকে</label><input type="date" id="psFrom" value="${psDv(PS.from)}" onchange="psSetDate('from', this.value)"></div>
+        <div class="form-field"><label>তারিখ পর্যন্ত</label><input type="date" id="psTo" value="${psDv(PS.to)}" onchange="psSetDate('to', this.value)"></div>
+      </div>
+      <div class="toolbar" style="margin-top:10px;">
+        <input type="search" placeholder="🔍 পণ্য / ক্যাটাগরি দিয়ে খুঁজুন" value="${esc(PS.q)}" oninput="psSetQ(this.value)">
+        <select onchange="psSetSort(this.value)"><option value="qty" ${PS.sort==='qty'?'selected':''}>বেশি বিক্রি আগে</option><option value="rev" ${PS.sort==='rev'?'selected':''}>বেশি টাকার বিক্রি আগে</option><option value="slow" ${PS.sort==='slow'?'selected':''}>কম বিক্রি আগে</option><option value="name" ${PS.sort==='name'?'selected':''}>নাম অনুযায়ী</option></select>
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;font-size:13.5px;"><input type="checkbox" ${PS.zero?'checked':''} onchange="psSetZero(this.checked)"> যে পণ্য বিক্রি হয়নি (কিন্তু স্টকে আছে) সেগুলোও দেখান</label>
+    </div>
+    <div id="psBody"></div>`;
+  psRefresh();
 }
 function stockCheckData(){
   const lastBuy = {};
@@ -4295,7 +4391,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৪.৪';
+const APP_VERSION = '৪.৫';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{
