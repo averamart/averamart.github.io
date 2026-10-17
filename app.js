@@ -335,7 +335,7 @@ function custList(){
   const seen = {}, out = [];
   CACHE.orders.slice().reverse().forEach(o => {
     if(!o.customerName) return; const k = kk(o.customerName) + '|' + kk(o.phone||''); if(seen[k]) return; seen[k] = 1;
-    out.push({name:o.customerName, phone:o.phone||'', address:o.address||'', pl:o.priceList||'retail'});
+    out.push({name:o.customerName, phone:o.phone||'', address:o.address||'', pl: PRICE_LISTS[o.priceList] ? o.priceList : 'retail'});
   });
   return out;
 }
@@ -377,8 +377,8 @@ function purchaseSuggestInit(){
   sgAttach('pu_supplier', supplierFind, n => `<b>${esc(n)}</b>`, n => { const e = document.getElementById('pu_supplier'); if(e) e.value = n; });
   sgAttach('pu_pname', q => prodMatches(q, 10, true), p => `<b>${esc(p.name)}</b> <span class="muted-cell">${esc(p.unit||'কেজি')} · স্টক ${fmtStock(p.stock, p)}</span>`, p => { const e = document.getElementById('pu_pname'); if(e){ e.value = p.name; onPurchaseNameType(); } });
 }
-const PRICE_LISTS = {retail:'খুচরা', wholesale:'পাইকারি', corporate:'কর্পোরেট'};
-function unitListPrice(p, list){ const f = list==='wholesale' ? 'wholesale' : list==='corporate' ? 'corporate' : 'retail', v = Number(p[f]); return (f!=='retail' && v>0) ? v : Number(p.retail||0); }
+const PRICE_LISTS = {retail:'খুচরা', corporate:'কর্পোরেট'};
+function unitListPrice(p, list){ const v = Number(p.corporate); return (list==='corporate' && v>0) ? v : Number(p.retail||0); }
 function packListPrice(p, list){ const n = Number(p.priceBasis)||1; return Math.round(unitListPrice(p, list)*n*100)/100; }
 function listPricesNote(p){
   const w = Number(p.wholesale)>0, c = Number(p.corporate)>0; if(!w && !c) return '';
@@ -1418,6 +1418,7 @@ function catLoad(){
   if(CAT) return;
   CAT = catDefaults();
   try{ const raw = JSON.parse(localStorage.getItem('AM_catalog_opts')||'null'); if(raw && typeof raw==='object') CAT = {...CAT, ...raw}; }catch(e){}
+  if(!PRICE_LISTS[CAT.priceList]) CAT.priceList = 'retail';
 }
 function catSave(){ try{ localStorage.setItem('AM_catalog_opts', JSON.stringify(CAT)); }catch(e){} }
 function catVal(k){ return String(CAT[k]==null ? '' : CAT[k]); }
@@ -2216,14 +2217,15 @@ function productRowsHtml(){
       <td>${esc(p.category)}</td>
       <td>${esc(p.unit||'কেজি')}</td>
       ${admin ? `<td class="cell-num">${money(packPrice(p,'cost'))}${fmtBasis(p)?`<br><span class="muted-cell" style="font-size:11.5px;">/ ${fmtBasis(p)}</span>`:''}</td>` : ''}
-      <td class="cell-num">${money(packPrice(p,'retail'))}${fmtBasis(p)?`<br><span class="muted-cell" style="font-size:11.5px;">/ ${fmtBasis(p)}</span>`:`<br><span class="muted-cell" style="font-size:11.5px;">/ ১ ${esc(p.unit||'কেজি')}</span>`}${listPricesNote(p)}</td>
+      <td class="cell-num">${money(packPrice(p,'retail'))}${fmtBasis(p)?`<br><span class="muted-cell" style="font-size:11.5px;">/ ${fmtBasis(p)}</span>`:`<br><span class="muted-cell" style="font-size:11.5px;">/ ১ ${esc(p.unit||'কেজি')}</span>`}</td>
+      <td class="cell-num">${Number(p.corporate)>0 ? money(packListPrice(p,'corporate')) : '<span class="muted-cell">—</span>'}</td>
       <td>${fmtStock(p.stock, p)} ${Number(p.stock)<=Number(p.minStock) && !p.hidden ? '<span class="badge badge-low">লো স্টক</span>' : ''}</td>
       <td class="cell-center">
         <button class="icon-btn" title="${p.hidden?'আবার চালু করুন':'লুকিয়ে রাখুন'}" onclick="toggleProductHidden('${p.id}')">${p.hidden?'🙈':'👁️'}</button>
         <button class="icon-btn" onclick="openProductForm('${p.id}')">✏️</button>
         ${admin ? `<button class="icon-btn danger" onclick="deleteProduct('${p.id}')">🗑️</button>` : ''}
       </td>
-    </tr>`).join('') || `<tr><td colspan="${admin?8:7}" class="empty-state">${CACHE.products.length ? 'এই ফিল্টারে কোনো পণ্য নেই' : 'কোনো পণ্য যোগ করা হয়নি'}</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="${admin?9:8}" class="empty-state">${CACHE.products.length ? 'এই ফিল্টারে কোনো পণ্য নেই' : 'কোনো পণ্য যোগ করা হয়নি'}</td></tr>`;
 }
 function onProductFilter(){
   PROD_Q = document.getElementById('prodSearch').value;
@@ -2261,7 +2263,7 @@ function renderProducts(){
       <div class="table-wrap"><table><thead><tr>
         <th>আইডি</th><th>পণ্যের নাম</th><th>ক্যাটাগরি</th><th>একক</th>
         ${isAdmin?'<th>ক্রয়মূল্য (কত পরিমাণে)</th>':''}
-        <th>বিক্রয়মূল্য (কত পরিমাণে)</th><th>স্টক</th><th>একশন</th>
+        <th>বিক্রয়মূল্য (কত পরিমাণে)</th><th>কর্পোরেট মূল্য</th><th>স্টক</th><th>একশন</th>
       </tr></thead><tbody id="prodBody">${rowsHtml}</tbody></table></div>
     </div>
     <div id="modalHolder"></div>
@@ -2270,20 +2272,20 @@ function renderProducts(){
 }
 
 const XL = {id:'আইডি', name:'পণ্যের নাম', cat:'ক্যাটাগরি', unit:'একক (কেজি/গ্রাম/লিটার/পিস)', cost:'ক্রয়মূল্য', retail:'বিক্রয়মূল্য', stock:'স্টক', min:'ন্যূনতম স্টক সতর্কতা', active:'সক্রিয় (হ্যাঁ/না)'};
-XL.wholesale = 'পাইকারি মূল্য'; XL.corporate = 'কর্পোরেট মূল্য';
-const XL_COLS = [XL.id, XL.name, XL.cat, XL.unit, XL.cost, XL.retail, XL.stock, XL.min, XL.active, XL.wholesale, XL.corporate];
+XL.corporate = 'কর্পোরেট মূল্য';
+const XL_COLS = [XL.id, XL.name, XL.cat, XL.unit, XL.cost, XL.retail, XL.corporate, XL.stock, XL.min, XL.active];
 function writeProductSheet(rows, filename){
   const ws = XLSX.utils.aoa_to_sheet([XL_COLS, ...rows]);
-  ws['!cols'] = [{wch:8},{wch:28},{wch:16},{wch:22},{wch:12},{wch:12},{wch:10},{wch:16},{wch:16},{wch:14},{wch:14}];
+  ws['!cols'] = [{wch:8},{wch:28},{wch:16},{wch:22},{wch:12},{wch:12},{wch:14},{wch:10},{wch:16},{wch:16}];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'পণ্য তালিকা');
   XLSX.writeFile(wb, filename);
 }
 function downloadProductDemoExcel(){
-  writeProductSheet([['','মিনিকেট চাল','খাদ্যশস্য','কেজি',68,78,200,20,'হ্যাঁ',75,72]], 'avera-mart-product-demo.xlsx');
+  writeProductSheet([['','মিনিকেট চাল','খাদ্যশস্য','কেজি',68,78,72,200,20,'হ্যাঁ']], 'avera-mart-product-demo.xlsx');
 }
 function exportProductsExcel(){
-  const rows = CACHE.products.map(p => [p.id, p.name, p.category, p.unit||'কেজি', p.cost, p.retail, p.stock, p.minStock, p.hidden?'না':'হ্যাঁ', p.wholesale||'', p.corporate||'']);
+  const rows = CACHE.products.map(p => [p.id, p.name, p.category, p.unit||'কেজি', p.cost, p.retail, p.corporate||'', p.stock, p.minStock, p.hidden?'না':'হ্যাঁ']);
   writeProductSheet(rows, `avera-mart-products-${todayStr()}.xlsx`);
 }
 function cellVal(row, key){ const v = row[key]; return (v===undefined || v===null || String(v).trim()==='') ? null : v; }
@@ -2320,7 +2322,7 @@ function handleExcelUpload(event){
         const unit = cellVal(row, XL.unit) ?? cellVal(row, 'একক');
         const cost = cellVal(row, XL.cost), retail = cellVal(row, XL.retail) ?? cellVal(row, 'খুচরা মূল্য');
         const stock = cellVal(row, XL.stock), min = cellVal(row, XL.min), active = cellVal(row, XL.active);
-        const whl = cellVal(row, XL.wholesale), cor = cellVal(row, XL.corporate);
+        const cor = cellVal(row, XL.corporate);
         if(idx>-1){
           const old = products[idx], ch = {};
           if(name) ch.name = name;
@@ -2328,7 +2330,6 @@ function handleExcelUpload(event){
           if(unit) ch.unit = String(unit).trim();
           if(cost!==null) ch.cost = Number(cost);
           if(retail!==null) ch.retail = Number(retail);
-          if(whl!==null) ch.wholesale = Number(whl)||0;
           if(cor!==null) ch.corporate = Number(cor)||0;
           if(min!==null) ch.minStock = Number(min);
           if(updateStock && stock!==null){ ch.stock = Number(stock); if(r3(ch.stock)!==r3(old.stock)) ch.adj = (old.adj||[]).concat([{d: todayStr(), q: r3(ch.stock - Number(old.stock||0))}]); }
@@ -2342,7 +2343,7 @@ function handleExcelUpload(event){
             id: newId, name,
             category: cat ? String(cat).trim() : 'অন্যান্য',
             unit: unit ? String(unit).trim() : 'কেজি',
-            cost: Number(cost||0), retail: Number(retail||0), wholesale: Number(whl||0), corporate: Number(cor||0),
+            cost: Number(cost||0), retail: Number(retail||0), corporate: Number(cor||0),
             stock: Number(stock||0), minStock: Number(min ?? 5),
             hidden: active!==null ? isNo(active) : false,
             createdAt: todayStr(),
@@ -2410,7 +2411,6 @@ function openProductForm(id){
         </div>
         ${isAdmin?`<div class="form-field"><label>ক্রয়মূল্য (৳) — <span class="basis-lbl"></span></label><input id="f_cost" type="number" step="any" value="${p?packPrice(p,'cost'):''}" oninput="updatePriceHint()"><span class="muted-cell" style="font-size:11.5px;">ক্রয় এন্ট্রি থাকলে এই দাম প্রতিবার ভাউচার গড় অনুযায়ী নিজে থেকে বদলায়।</span></div>`:''}
         <div class="form-field"><label>বিক্রয়মূল্য (৳) — <span class="basis-lbl"></span></label><input id="f_retail" type="number" step="any" value="${p?packPrice(p,'retail'):''}" oninput="updatePriceHint()"></div>
-        <div class="form-field"><label>পাইকারি মূল্য (৳) — ঐচ্ছিক, <span class="basis-lbl"></span></label><input id="f_wholesale" type="number" step="any" value="${p && Number(p.wholesale)>0 ? packListPrice(p,'wholesale') : ''}" placeholder="ফাঁকা = খুচরা দাম"></div>
         <div class="form-field"><label>কর্পোরেট মূল্য (৳) — ঐচ্ছিক, <span class="basis-lbl"></span></label><input id="f_corporate" type="number" step="any" value="${p && Number(p.corporate)>0 ? packListPrice(p,'corporate') : ''}" placeholder="ফাঁকা = খুচরা দাম"></div>
         <div class="form-field" style="grid-column:1/-1;"><div id="f_pricehint" class="flash" style="margin:0;"></div></div>
         <div class="form-field"><label>বর্তমান স্টক (এককে)</label><input id="f_stock" type="number" value="${p?p.stock:0}"></div>
@@ -2447,7 +2447,6 @@ function saveProduct(id){
     priceBasis: basis,
     packSize: parsePackUnit(document.getElementById('f_unit').value.trim()) ? 0 : (products.find(p=>p.id===id)?.packSize || 0),
     retail: per(Number(document.getElementById('f_retail').value||0)),
-    wholesale: (() => { const v = Number(document.getElementById('f_wholesale').value||0); return v>0 ? per(v) : 0; })(),
     corporate: (() => { const v = Number(document.getElementById('f_corporate').value||0); return v>0 ? per(v) : 0; })(),
     stock: Number(document.getElementById('f_stock').value||0),
     minStock: Number(document.getElementById('f_min').value||0),
@@ -2583,11 +2582,11 @@ function openOrderForm(id, from){
   ORDER_FROM = from || 'orders'; ORDER_EDIT_ID = id || '';
   const orders = CACHE.orders;
   const o = id ? orders.find(x=>x.id===id) : null;
-  ORDER_PL = (o && o.priceList) || 'retail';
+  ORDER_PL = (o && PRICE_LISTS[o.priceList]) ? o.priceList : 'retail';
   ORDER_CART = o ? orderItems(o).map(it=>{
     const p = CACHE.products.find(x=>x.id===it.productId);
     const m = unitOptions(p).find(o=>o.label===it.du);
-    return {...it, mode: m ? m.key : 'base', pl: it.pl || ORDER_PL};
+    return {...it, mode: m ? m.key : 'base', pl: PRICE_LISTS[it.pl] ? it.pl : ORDER_PL};
   }) : [];
 
   const html = `
@@ -4391,7 +4390,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৪.৫';
+const APP_VERSION = '৪.৬';
 const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
 function fmtUpdated(d){
   try{
