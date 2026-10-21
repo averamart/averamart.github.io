@@ -27,7 +27,7 @@ const CACHE = {
     phone: '',
     website: ''
   },
-  users: { admin:{pin:'1234'}, manager:{pin:'2222'}, delivery:{pin:'3333'} }
+  users: { admin:{pin:'1234'}, manager:{pin:'2222'} }   // পুরোনো ডেটাবেজে থাকা delivery এন্ট্রি মোছা হয় না — শুধু আর ব্যবহার হয় না
 };
 const LOADED = { products:false, orders:false, purchases:false, expenses:false, returns:false, shareholders:false, contributions:false, closings:false, leaflets:false, investments:false, settings:false, users:false };
 
@@ -157,7 +157,13 @@ function onCloudUpdate(){
   if(loginScreenVisible){
     document.getElementById('loginStatus').textContent = '';
     document.getElementById('loginFormWrap').classList.remove('hidden');
+    refreshLoginMode();
+    // আগের সেশন থাকলে (পেইজ খোলার সময় ডেটা আসেনি) এখন যাচাই করে ঢোকানো হবে
+    if(getSession()) boot();
   } else {
+    // পাসওয়ার্ড রিসেট/বদল হলে বা ব্যবহারকারী বাদ পড়লে পুরোনো সেশন বন্ধ
+    if(!sessionValid(getSession())){ localStorage.removeItem('AM_session'); alert('আপনার লগইন তথ্য বদলে গেছে বা মেয়াদ শেষ — আবার লগইন করুন।'); boot(); return; }
+    if(getSession().role==='admin' && needsSetup()){ if(currentPage!=='__setup'){ renderSetup(); } return; }
     // একটা ফর্ম খোলা থাকলে (কেউ টাইপ করছে) পেইজ রিফ্রেশ করে সেটা মুছে ফেলা হবে না
     const mh = document.getElementById('modalHolder');
     if(mh && mh.innerHTML.trim()) return;
@@ -447,23 +453,98 @@ const PAY_METHODS = [
 ];
 
 /* ---------------- Session (who's logged in on THIS device) ---------------- */
+const ROLES = ['admin','manager'];
 function getSession(){
-  const raw = localStorage.getItem('AM_session');
-  return raw ? JSON.parse(raw) : null;
+  let s = null;
+  try{ const raw = localStorage.getItem('AM_session'); s = raw ? JSON.parse(raw) : null; }catch(e){ s = null; }
+  // ডেলিভারি ম্যান রোল তুলে দেওয়া হয়েছে — পুরোনো ওই সেশন থাকলে সেটা আর চলবে না
+  if(!s || !ROLES.includes(s.role)) return null;
+  return s;
 }
-function handleLogin(){
-  const role = document.getElementById('loginRole').value;
-  const pin = document.getElementById('loginPin').value.trim();
+
+/* ---- লগইন: ইমেইল/ফোন + পাসওয়ার্ড ----
+   পাসওয়ার্ড কখনো সরাসরি রাখা হয় না — PBKDF2 (লবণসহ, ১.৫ লক্ষ ধাপ) দিয়ে মিশিয়ে "users" ডকুমেন্টে থাকে।
+   অ্যাডমিন সেটিংস থেকে ম্যানেজারের পাসওয়ার্ড রিসেট করেন; রিসেট হলে ওই ব্যবহারকারীর পুরোনো সব লগইন নিজে থেকে বন্ধ হয়ে যায়। */
+const PBKDF2_ITER = 150000;
+const ROLE_BN = {admin:'অ্যাডমিন', manager:'ম্যানেজার'};
+function normLoginId(s){
+  let t = bnToEn(String(s||'')).trim();
+  if(t.includes('@')) return t.toLowerCase().replace(/\s+/g,'');
+  t = t.replace(/[\s\-().]/g,'');
+  if(t.startsWith('+88')) t = t.slice(3); else if(t.startsWith('88') && t.length===13) t = t.slice(2);
+  return t;
+}
+function validLoginId(t){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t) || /^01\d{9}$/.test(t); }
+function b64enc(buf){ let s = ''; new Uint8Array(buf).forEach(b => s += String.fromCharCode(b)); return btoa(s); }
+function b64dec(s){ const bin = atob(s), a = new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) a[i] = bin.charCodeAt(i); return a; }
+async function pbkdf2(pass, saltB64, iter){
+  if(!(window.crypto && crypto.subtle)) throw new Error('এই ব্রাউজারে নিরাপদ পাসওয়ার্ড সুবিধা নেই — অ্যাপটি https লিংকে (যেমন Netlify/GitHub Pages) খুলুন।');
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(String(pass)), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({name:'PBKDF2', hash:'SHA-256', salt:b64dec(saltB64), iterations:iter}, key, 256);
+  return b64enc(bits);
+}
+async function makeCred(pass){
+  const salt = b64enc(crypto.getRandomValues(new Uint8Array(16)));
+  return {salt, iter:PBKDF2_ITER, hash: await pbkdf2(pass, salt, PBKDF2_ITER)};
+}
+function hasCreds(u){ return !!(u && u.loginId && u.hash && u.salt); }
+async function checkPass(u, pass){
+  if(!hasCreds(u)) return false;
+  return (await pbkdf2(pass, u.salt, u.iter || PBKDF2_ITER)) === u.hash;
+}
+function needsSetup(){ return !hasCreds((CACHE.users||{}).admin); }
+function sessionValid(s){
+  if(!s || !ROLES.includes(s.role)) return false;
+  const u = (CACHE.users||{})[s.role];
+  if(!hasCreds(u)) return s.role==='admin';          // নতুন লগইন চালুর আগের অ্যাডমিন সেশন — সেটআপ করানো হবে
+  return Number(s.v||0) === Number(u.v||1);
+}
+function saveSession(role){
+  const u = (CACHE.users||{})[role] || {};
+  localStorage.setItem('AM_session', JSON.stringify({role, v: hasCreds(u) ? Number(u.v||1) : 0}));
+}
+// পুরোনো ব্যবহারকারী তথ্য (যেমন delivery, pin) অক্ষত রেখে শুধু বদলানো অংশ হালনাগাদ হয়
+function patchUser(role, patch){
+  const users = {...CACHE.users, [role]: {...(CACHE.users[role]||{}), ...patch}};
+  saveUsers(users);
+}
+let LOGIN_FAIL = {n:0, until:0};
+function loginWait(){ return Math.max(0, Math.ceil((LOGIN_FAIL.until - Date.now())/1000)); }
+function loginFailed(errEl, msg){
+  LOGIN_FAIL.n++;
+  if(LOGIN_FAIL.n >= 5){ LOGIN_FAIL = {n:0, until:Date.now()+30000}; msg = 'অনেকবার ভুল হয়েছে — ৩০ সেকেন্ড পরে আবার চেষ্টা করুন।'; }
+  errEl.textContent = msg;
+}
+async function handleLogin(){
+  const errEl = document.getElementById('loginError'), btn = document.getElementById('loginBtn');
+  if(!allLoaded()){ errEl.textContent = 'ক্লাউড ডেটা লোড হচ্ছে, একটু অপেক্ষা করুন।'; return; }
+  if(loginWait() > 0){ errEl.textContent = `অনেকবার ভুল হয়েছে — ${loginWait()} সেকেন্ড পরে আবার চেষ্টা করুন।`; return; }
+  const id = normLoginId(document.getElementById('loginId').value), pass = document.getElementById('loginPass').value;
+  if(!id || !pass){ errEl.textContent = 'ইমেইল/ফোন নম্বর ও পাসওয়ার্ড দুটোই লিখুন।'; return; }
+  if(btn) btn.disabled = true;
+  try{
+    const role = ROLES.find(r => { const u = CACHE.users[r]; return hasCreds(u) && normLoginId(u.loginId)===id; });
+    const ok = role ? await checkPass(CACHE.users[role], pass) : false;
+    if(ok){ LOGIN_FAIL = {n:0, until:0}; saveSession(role); errEl.textContent = ''; document.getElementById('loginPass').value = ''; boot(); }
+    else { if(!role) await pbkdf2(pass, b64enc(new Uint8Array(16)), PBKDF2_ITER).catch(()=>{}); loginFailed(errEl, 'ইমেইল/ফোন নম্বর বা পাসওয়ার্ড ভুল।'); }
+  }catch(e){ errEl.textContent = e.message || String(e); }
+  finally{ if(btn) btn.disabled = false; }
+}
+// নতুন লগইন চালুর পর প্রথমবারের জন্য: অ্যাডমিন পুরোনো পিন দিয়ে ঢুকে নিজের ইমেইল/ফোন ও পাসওয়ার্ড সেট করবেন
+function handleSetupLogin(){
   const errEl = document.getElementById('loginError');
   if(!allLoaded()){ errEl.textContent = 'ক্লাউড ডেটা লোড হচ্ছে, একটু অপেক্ষা করুন।'; return; }
-  if(!pin){ errEl.textContent = 'পিন লিখুন।'; return; }
-  if(CACHE.users[role] && CACHE.users[role].pin === pin){
-    localStorage.setItem('AM_session', JSON.stringify({role}));
-    errEl.textContent = '';
-    boot();
-  } else {
-    errEl.textContent = 'ভুল পিন। আবার চেষ্টা করুন।';
-  }
+  if(!needsSetup()){ errEl.textContent = 'সেটআপ আগেই হয়ে গেছে — উপরের ইমেইল/ফোন ও পাসওয়ার্ড দিয়ে ঢুকুন।'; refreshLoginMode(); return; }
+  if(loginWait() > 0){ errEl.textContent = `${loginWait()} সেকেন্ড পরে আবার চেষ্টা করুন।`; return; }
+  const pin = document.getElementById('loginPin').value.trim();
+  if(!pin){ errEl.textContent = 'পুরোনো অ্যাডমিন পিন লিখুন।'; return; }
+  if((CACHE.users.admin||{}).pin === pin){
+    LOGIN_FAIL = {n:0, until:0}; saveSession('admin'); errEl.textContent = ''; document.getElementById('loginPin').value = ''; boot();
+  } else loginFailed(errEl, 'ভুল পিন।');
+}
+function refreshLoginMode(){
+  const box = document.getElementById('loginSetupBox'); if(!box) return;
+  box.classList.toggle('hidden', !(allLoaded() && needsSetup()));
 }
 function handleLogout(){
   localStorage.removeItem('AM_session');
@@ -474,7 +555,7 @@ function handleLogout(){
 const NAV_ITEMS = [
   {key:'dashboard', label:'ড্যাশবোর্ড', icon:'🏠', roles:['admin','manager']},
   {key:'products', label:'পণ্য তালিকা', icon:'📦', roles:['admin','manager']},
-  {key:'orders', label:'অর্ডার ও সেলস', icon:'🛍️', roles:['admin','manager','delivery']},
+  {key:'orders', label:'অর্ডার ও সেলস', icon:'🛍️', roles:['admin','manager']},
   {key:'leaflet', label:'অফার লিফলেট', icon:'📣', roles:['admin','manager']},
   {key:'catalog', label:'পণ্য ক্যাটালগ', icon:'📖', roles:['admin','manager']},
   {key:'productsales', label:'পণ্য বিক্রয় রিপোর্ট', icon:'📈', roles:['admin','manager']},
@@ -487,7 +568,7 @@ const NAV_ITEMS = [
   {key:'profitloss', label:'লাভ-ক্ষতি', icon:'📊', roles:['admin']},
   {key:'closing', label:'মাস ক্লোজিং ও লক', icon:'🔒', roles:['admin']},
   {key:'stockcheck', label:'স্টক মূল্য যাচাই', icon:'🧮', roles:['admin']},
-  {key:'invoice', label:'ইনভয়েস', icon:'🧾', roles:['admin','manager','delivery']},
+  {key:'invoice', label:'ইনভয়েস', icon:'🧾', roles:['admin','manager']},
   {key:'settings', label:'সেটিংস', icon:'⚙️', roles:['admin']}
 ];
 
@@ -507,12 +588,13 @@ function renderNav(){
       <span>${i.label}</span><span>${i.icon}</span>
     </button>`).join('');
 
-  const roleLabelMap = {admin:'অ্যাডমিন', manager:'ম্যানেজার', delivery:'ডেলিভারি ম্যান'};
-  document.getElementById('sessionInfo').textContent = 'লগইন: ' + roleLabelMap[session.role] + ' · ☁️ লাইভ';
+  const u = (CACHE.users||{})[session.role] || {};
+  document.getElementById('sessionInfo').textContent = 'লগইন: ' + ROLE_BN[session.role] + (u.name ? ' (' + u.name + ')' : '') + ' · ☁️ লাইভ';
 }
 
 function go(page){
   const session = getSession();
+  if(session.role==='admin' && allLoaded() && needsSetup()){ renderSetup(); return; }
   const allowed = NAV_ITEMS.find(i=>i.key===page);
   if(allowed && !allowed.roles.includes(session.role)) page = NAV_ITEMS.find(i=>i.roles.includes(session.role)).key;
   currentPage = page;
@@ -523,7 +605,7 @@ function go(page){
   document.getElementById('sidebarBackdrop').classList.remove('show');
   const titles = Object.fromEntries(NAV_ITEMS.map(i=>[i.key,i.label]));
   document.getElementById('pageTitle').textContent = titles[page] || '';
-  { const eb = document.getElementById('exportBtns'); if(eb) eb.classList.toggle('hidden', session.role==='delivery'); }
+  { const eb = document.getElementById('exportBtns'); if(eb) eb.classList.remove('hidden'); }
   const renderers = {
     dashboard: renderDashboard, products: renderProducts, orders: renderOrders,
     purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck, leaflet: renderLeaflet, catalog: renderCatalog, productsales: renderProductSales,
@@ -534,7 +616,8 @@ function go(page){
 
 /* ---------------- Boot ---------------- */
 function boot(){
-  const session = getSession();
+  let session = getSession();
+  if(session && allLoaded() && !sessionValid(session)){ localStorage.removeItem('AM_session'); session = null; }
   if(session){
     document.getElementById('loginScreen').classList.add('hidden');
     document.getElementById('appShell').classList.remove('hidden');
@@ -542,6 +625,7 @@ function boot(){
   } else {
     document.getElementById('loginScreen').classList.remove('hidden');
     document.getElementById('appShell').classList.add('hidden');
+    refreshLoginMode();
     if(!allLoaded()){
       document.getElementById('loginFormWrap').classList.add('hidden');
       document.getElementById('loginStatus').textContent = '☁️ ক্লাউড ডেটাবেজের সাথে সংযোগ করা হচ্ছে...';
@@ -564,12 +648,28 @@ if('serviceWorker' in navigator){
    পরের মাসগুলোর শুরুর জের নিজে থেকেই ঠিক হয়ে যায়। লক করা মাসের হিসাব "স্ন্যাপশট" হিসেবে স্থির থাকে।
    ============================================================ */
 const BN_MONTHS = ['জানুয়ারি','ফেব্রুয়ারি','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টেম্বর','অক্টোবর','নভেম্বর','ডিসেম্বর'];
+/* ---- হিসাবের "মাস" = ১৬ তারিখ থেকে পরের মাসের ১৫ তারিখ ----
+   যেমন ১৬ অক্টোবর – ১৫ নভেম্বর = "অক্টোবর"। মাসের চাবি (key) এখনো "YYYY-MM" (শুরুর মাসের নামে), তাই
+   ডেটাবেজে রাখা কোনো তারিখ বদলাতে হয় না — তারিখ দেখে মাস নিজে থেকেই হিসাব হয়। */
+const PERIOD_START_DAY = 16;
+const BN_MONTHS_SHORT = ['জানু','ফেব্রু','মার্চ','এপ্রিল','মে','জুন','জুলাই','আগস্ট','সেপ্টে','অক্টো','নভে','ডিসে'];
+function bnNum(n){ return String(n).replace(/\d/g, d => '০১২৩৪৫৬৭৮৯'[d]); }
 function monthLabel(m){ const p = String(m).split('-'); return (BN_MONTHS[Number(p[1])-1] || p[1]) + ' ' + p[0]; }
-function curMonth(){ return todayStr().slice(0,7); }
-function mOf(d){ return (typeof d==='string' && /^\d{4}-\d{2}/.test(d)) ? d.slice(0,7) : ''; }
+function mOf(d){
+  if(!(typeof d==='string' && /^\d{4}-\d{2}/.test(d))) return '';
+  if(d.length < 10) return d.slice(0,7);                       // শুধু বছর-মাস থাকলে যেমন আছে
+  return Number(d.slice(8,10)) >= PERIOD_START_DAY ? d.slice(0,7) : addMonths(d.slice(0,7), -1);
+}
+function curMonth(){ return mOf(todayStr()); }
 function addMonths(m, n){
   const p = m.split('-'); const d = new Date(Date.UTC(Number(p[0]), Number(p[1])-1+n, 1));
   return d.getUTCFullYear() + '-' + String(d.getUTCMonth()+1).padStart(2,'0');
+}
+function monthStart(m){ return m + '-' + String(PERIOD_START_DAY).padStart(2,'0'); }                       // মাসের প্রথম দিন (১৬)
+function monthEnd(m){ return addMonths(m, 1) + '-' + String(PERIOD_START_DAY-1).padStart(2,'0'); }        // মাসের শেষ দিন (পরের মাসের ১৫)
+function monthRangeText(m){
+  const a = Number(String(m).split('-')[1]), b = Number(String(addMonths(m,1)).split('-')[1]);
+  return `${bnNum(PERIOD_START_DAY)} ${BN_MONTHS_SHORT[a-1]} – ${bnNum(PERIOD_START_DAY-1)} ${BN_MONTHS_SHORT[b-1]}`;
 }
 function fmtDT(iso){ try{ return new Date(iso).toLocaleString('en-GB',{timeZone:'Asia/Dhaka', day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}); }catch(e){ return ''; } }
 const r2 = n => Math.round(Number(n||0)*100)/100;
@@ -669,13 +769,13 @@ function carryForward(m, idx){
 function monthOptionsHtml(selected, includeAll){
   const cur = curMonth();
   return (includeAll ? `<option value="all" ${selected==='all'?'selected':''}>সব মাস</option>` : '') +
-    monthsList().slice().reverse().map(m => `<option value="${m}" ${m===selected?'selected':''}>${monthLabel(m)}${isMonthLocked(m)?' 🔒':''}${m===cur?' (চলমান)':''}</option>`).join('');
+    monthsList().slice().reverse().map(m => `<option value="${m}" ${m===selected?'selected':''}>${monthLabel(m)} (${monthRangeText(m)})${isMonthLocked(m)?' 🔒':''}${m===cur?' · চলমান':''}</option>`).join('');
 }
 function monthStatusHtml(m){
   const cur = curMonth();
-  if(isMonthLocked(m)){ const c = closingRec(m); return `<div class="flash warn" style="margin-bottom:14px;">🔒 <b>${monthLabel(m)}</b> মাসের হিসাব লক করা আছে (${fmtDT(c.lockedAt)}) — এই পেইজের সংখ্যাগুলো স্থির, কোনো পরিবর্তন হবে না।</div>`; }
-  if(m === cur) return `<div class="flash" style="margin-bottom:14px;">📅 <b>${monthLabel(m)}</b> — চলমান মাস। হিসাব প্রতিদিনের এন্ট্রি অনুযায়ী বদলাচ্ছে। আগের মাসের জের নিজে থেকেই যোগ হয়েছে।</div>`;
-  if(m < cur) return `<div class="flash" style="margin-bottom:14px;">🔓 <b>${monthLabel(m)}</b> — এই মাস এখনো লক হয়নি। হিসাব মিলিয়ে দেখে ${isAdmin()?'"মাস ক্লোজিং ও লক" পেইজ থেকে':'অ্যাডমিনকে বলে'} লক করুন।</div>`;
+  if(isMonthLocked(m)){ const c = closingRec(m); return `<div class="flash warn" style="margin-bottom:14px;">🔒 <b>${monthLabel(m)}</b> (${monthRangeText(m)}) মাসের হিসাব লক করা আছে (${fmtDT(c.lockedAt)}) — এই পেইজের সংখ্যাগুলো স্থির, কোনো পরিবর্তন হবে না।</div>`; }
+  if(m === cur) return `<div class="flash" style="margin-bottom:14px;">📅 <b>${monthLabel(m)}</b> (${monthRangeText(m)}) — চলমান মাস। হিসাব প্রতিদিনের এন্ট্রি অনুযায়ী বদলাচ্ছে। আগের মাসের জের নিজে থেকেই যোগ হয়েছে।</div>`;
+  if(m < cur) return `<div class="flash" style="margin-bottom:14px;">🔓 <b>${monthLabel(m)}</b> (${monthRangeText(m)}) — এই মাস এখনো লক হয়নি। হিসাব মিলিয়ে দেখে ${isAdmin()?'"মাস ক্লোজিং ও লক" পেইজ থেকে':'অ্যাডমিনকে বলে'} লক করুন।</div>`;
   return '';
 }
 let VIEW_MONTH = curMonth();
@@ -689,7 +789,7 @@ function lockMonth(m){
   const earlier = monthsList().filter(x => x < m && !isMonthLocked(x));
   if(earlier.length){ alert(`আগে ${monthLabel(earlier[0])} মাস লক করুন — মাস লক করতে হয় ক্রমানুসারে (পুরোনো থেকে নতুন)।`); return; }
   const f = monthData(m);
-  if(!confirm(`${monthLabel(m)} মাসের হিসাব ক্লোজ ও লক করবেন?\n\nবিক্রয়: ${money(f.revenue)}\nনিট লাভ: ${money(f.net)}\nমাস শেষের স্টকের মূল্য: ${money(f.closeVal)}\n\nলক করলে এই মাসের তারিখে কোনো অর্ডার/ক্রয়/খরচ/আয় যোগ, সংশোধন বা মোছা যাবে না। মাস শেষের স্টক ও নিট প্রফিট পরের মাসে জের হিসেবে যোগ হবে।`)) return;
+  if(!confirm(`${monthLabel(m)} (${monthRangeText(m)}) মাসের হিসাব ক্লোজ ও লক করবেন?\n\nবিক্রয়: ${money(f.revenue)}\nনিট লাভ: ${money(f.net)}\nমাস শেষের স্টকের মূল্য: ${money(f.closeVal)}\n\nলক করলে এই মাসের তারিখে কোনো অর্ডার/ক্রয়/খরচ/আয় যোগ, সংশোধন বা মোছা যাবে না। মাস শেষের স্টক ও নিট প্রফিট পরের মাসে জের হিসেবে যোগ হবে।`)) return;
   const now = new Date().toISOString();
   const old = closingRec(m) || {};
   const list = (CACHE.closings||[]).filter(c => c.month !== m);
@@ -698,15 +798,13 @@ function lockMonth(m){
   setFlash('closing', `✅ ${monthLabel(m)} মাসের হিসাব ক্লোজ ও লক হয়েছে। মাস শেষের স্টক ও জমা পরের মাসে জের হিসেবে যোগ হয়ে গেছে।`, []);
   renderClosing(); toTop();
 }
-function unlockMonth(m){
+async function unlockMonth(m){
   if(!isAdmin()){ alert('লক খোলা শুধু অ্যাডমিন করতে পারবেন।'); return; }
   const later = (CACHE.closings||[]).filter(c => c.locked && c.month > m).map(c => c.month).sort();
   let msg = `🔓 ${monthLabel(m)} মাসের লক খুলবেন?\n\nলক খুলে যা যোগ/সংশোধন করার করুন, তারপর অবশ্যই আবার লক করবেন।`;
   if(later.length) msg += `\n\n⚠️ এই মাসের পরিবর্তন পরের মাসগুলোর শুরুর জের বদলে দেয়, তাই এর পরের লক করা মাসগুলোও (${later.map(monthLabel).join(', ')}) খুলে যাবে। কাজ শেষে পুরোনো থেকে নতুন ক্রমে আবার লক করতে হবে।`;
   if(!confirm(msg)) return;
-  const pin = prompt('নিশ্চিত করতে অ্যাডমিন পিন দিন:');
-  if(pin===null) return;
-  if(String(pin).trim() !== String((CACHE.users.admin||{}).pin)){ alert('ভুল পিন — লক খোলা হয়নি।'); return; }
+  if(!(await confirmAdminPassword('লক খুলতে নিজের অ্যাডমিন পাসওয়ার্ড দিন।'))) return;
   const why = prompt('লক খোলার কারণ লিখুন (ঐচ্ছিক):') || '';
   const now = new Date().toISOString(), tgt = [m].concat(later);
   const list = (CACHE.closings||[]).map(c => tgt.includes(c.month)
@@ -736,7 +834,7 @@ function renderClosing(){
     else if(earlier.length) action = `<span class="muted-cell">আগে ${monthLabel(earlier[0])} লক করুন</span>`;
     else action = `<button class="btn btn-primary btn-sm" onclick="lockMonth('${m}')">🔒 ক্লোজ ও লক করুন</button>`;
     return `<tr>
-      <td><b>${monthLabel(m)}</b></td>
+      <td><b>${monthLabel(m)}</b><br><span class="muted-cell" style="font-size:11.5px;">${monthRangeText(m)}</span></td>
       <td class="cell-center">${d.locked ? '<span class="badge badge-locked">🔒 লক</span>' : '<span class="badge badge-open">খোলা</span>'}</td>
       <td class="cell-num">${money(d.revenue)}</td>
       <td class="cell-num">${money(d.net)}</td>
@@ -751,7 +849,7 @@ function renderClosing(){
   document.getElementById('pageContent').innerHTML = `
     ${flashHtml('closing')}
     <div class="panel">
-      <h3>চলমান মাস (${monthLabel(cur)}) — আগের মাস থেকে যা জের হিসেবে এসেছে</h3>
+      <h3>চলমান মাস (${monthLabel(cur)} · ${monthRangeText(cur)}) — আগের মাস থেকে যা জের হিসেবে এসেছে</h3>
       <table>
         <tr><td>মাসের শুরুর স্টকের মূল্য (ক্রয়মূল্যে)</td><td class="cell-num">${money(cd.openVal)}</td></tr>
         <tr><td>আগের মাসগুলোর জমা নিট লাভ (জের)</td><td class="cell-num">${money(carryForward(cur, idx))}</td></tr>
@@ -762,7 +860,7 @@ function renderClosing(){
     </div>
     <div class="panel">
       <h3>মাসভিত্তিক ক্লোজিং</h3>
-      <p style="font-size:12.5px;color:var(--text-muted);">মাস শেষ হলে হিসাব মিলিয়ে "ক্লোজ ও লক করুন" চাপুন। লক করা মাসের তারিখে কোনো অর্ডার, ক্রয়, খরচ/আয় যোগ, সংশোধন বা মোছা যায় না। লক ক্রমানুসারে (পুরোনো থেকে নতুন) করতে হয়।</p>
+      <p style="font-size:12.5px;color:var(--text-muted);">এখানে প্রতিটি মাস ১৬ তারিখ থেকে পরের মাসের ১৫ তারিখ পর্যন্ত (যেমন ১৬ অক্টোবর – ১৫ নভেম্বর = অক্টোবর)। মাস শেষ হলে হিসাব মিলিয়ে "ক্লোজ ও লক করুন" চাপুন। লক করা মাসের তারিখে কোনো অর্ডার, ক্রয়, খরচ/আয় যোগ, সংশোধন বা মোছা যায় না। লক ক্রমানুসারে (পুরোনো থেকে নতুন) করতে হয়।</p>
       <div class="table-wrap"><table><thead><tr>
         <th>মাস</th><th>অবস্থা</th><th>বিক্রয়</th><th>নিট লাভ</th><th>মাস শেষের স্টক মূল্য</th><th>একশন</th><th>রিপোর্ট</th>
       </tr></thead><tbody>${rows}</tbody></table></div>
@@ -1410,7 +1508,7 @@ let CAT = null, CAT_PREV = 0, CAT_TIMER = null, CAT_TOK = 0;
 const CAT_IMG = new Map(), CAT_TOC_ROWS = 24;
 function bnYear(y){ return Number(y).toLocaleString('bn-BD', {useGrouping:false}); }
 function catDefaults(){
-  const st = CACHE.settings, cm = curMonth().split('-');
+  const st = CACHE.settings, cm = todayStr().split('-');   // ক্যাটালগের তারিখ ক্যালেন্ডার মাসেই
   return {title:'পণ্য ক্যাটালগ', dateText: `${BN_MONTHS[Number(cm[1])-1]} ${bnYear(cm[0])}`, perPage:12, showPrice:true, priceList:'retail', hideZero:true, excludeHidden:true, cover:true, toc:true, cats:{},
     tagline: st.tagline||'', footerNote:'ফ্রি হোম ডেলিভারি', footerSub: st.website||'', phone: st.phone||'', address: st.businessAddress||'', disclaimer:'দাম পরিবর্তনযোগ্য, স্টক থাকা সাপেক্ষে'};
 }
@@ -1762,7 +1860,7 @@ function fullReportModel(){
     md.map(d => [monthLabel(d.month), money(d.revenue), money(d.cogs), money(d.gross), money(d.otherIncome), money(d.expenses), money(d.net), money(d.closeVal), d.locked ? 'লক' : 'খোলা']));
   T('পণ্য ও স্টক (এখনকার অবস্থা)', ['আইডি','পণ্য','ক্যাটাগরি','একক','স্টক','ক্রয়মূল্য','বিক্রয়মূল্য','স্টক মূল্য (ক্রয়)'],
     CACHE.products.map(p => [p.id, p.name, p.category||'', p.unit||'কেজি', String(r3(p.stock||0)), money(p.cost||0), money(p.retail||0), money(r2(Math.max(0,Number(p.stock||0))*Number(p.cost||0)))]));
-  { const psd = Object.values(psData(m==='all' ? '0000-01-01' : m+'-01', m==='all' ? '9999-12-31' : m+'-31')).sort((a,b) => b.qty-a.qty);
+  { const psd = Object.values(psData(m==='all' ? '0000-01-01' : monthStart(m), m==='all' ? '9999-12-31' : monthEnd(m))).sort((a,b) => b.qty-a.qty);
     T('পণ্যভিত্তিক বিক্রয় (ডেলিভারড)', ['পণ্য','ক্যাটাগরি','বিক্রিত পরিমাণ','অর্ডার','বিক্রয়','গ্রস লাভ'], psd.map(a => [a.name, a.cat, psQty(a), String(a.ords.size), money(r2(a.rev)), money(r2(a.rev-a.cogs))])); }
   T('বিক্রয় (অর্ডার)', ['তারিখ','অর্ডার','কাস্টমার','মোবাইল','মূল্য তালিকা','অবস্থা','মোট','পরিশোধিত','বকেয়া'],
     orders.map(o => [o.date, o.id, o.customerName||'', o.phone||'', PRICE_LISTS[o.priceList]||'খুচরা', o.status, money(o.total||0), money(o.paidAmount||0), money(orderDue(o))]));
@@ -1817,7 +1915,7 @@ function fullReportPanelHtml(){
    PRODUCT SALES REPORT — কোন মাসে/তারিখে কোন পণ্য কতটি বিক্রি (ডেলিভারড অর্ডার, রিটার্ন বাদে)
    ============================================================ */
 let PS = null;
-function psInit(){ if(PS) return; const cm = curMonth(); PS = {month:cm, from:cm+'-01', to:todayStr(), custom:false, q:'', sort:'qty', zero:false, detail:''}; }
+function psInit(){ if(PS) return; const cm = curMonth(); PS = {month:cm, from:monthStart(cm), to:todayStr(), custom:false, q:'', sort:'qty', zero:false, detail:''}; }
 function psData(from, to){
   const prod = {};
   CACHE.orders.filter(o => o.status==='Delivered' && o.date>=from && o.date<=to).forEach(o => {
@@ -1835,7 +1933,7 @@ function psQty(a){ return a.p ? fmtStock(a.qty, a.p) : String(r3(a.qty)); }
 function psSetMonth(v){
   PS.custom = false;
   if(v==='all'){ PS.month = 'all'; PS.from = '0000-01-01'; PS.to = '9999-12-31'; }
-  else { PS.month = v; PS.from = v + '-01'; PS.to = (v===curMonth()) ? todayStr() : v + '-31'; }
+  else { PS.month = v; PS.from = monthStart(v); PS.to = (v===curMonth()) ? todayStr() : monthEnd(v); }
   PS.detail = ''; psSyncDates(); psRefresh();
 }
 function psSetDate(which, v){ if(!v) return; PS[which] = v; PS.custom = true; PS.detail = ''; const sel = document.getElementById('psMonthSel'); if(sel) sel.innerHTML = monthOptionsHtml('', true) + '<option value="custom" selected>নিজের তারিখ</option>'; psRefresh(); }
@@ -1860,7 +1958,7 @@ function psRefresh(){
   list.sort(cmp[PS.sort] || cmp.qty);
   const totRev = r2(list.reduce((t,a) => t + a.rev, 0)), totCogs = r2(list.reduce((t,a) => t + a.cogs, 0)), sold = list.filter(a => a.qty>0).length;
   const ordSet = new Set(); list.forEach(a => a.ords.forEach(x => ordSet.add(x)));
-  const label = PS.custom ? `${PS.from==='0000-01-01' ? 'শুরু' : PS.from} থেকে ${PS.to==='9999-12-31' ? 'এখন পর্যন্ত' : PS.to}` : (PS.month==='all' ? 'সব সময়' : (PS.month===curMonth() ? monthLabel(PS.month) + ' (আজ পর্যন্ত)' : monthLabel(PS.month)));
+  const label = PS.custom ? `${PS.from==='0000-01-01' ? 'শুরু' : PS.from} থেকে ${PS.to==='9999-12-31' ? 'এখন পর্যন্ত' : PS.to}` : (PS.month==='all' ? 'সব সময়' : (PS.month===curMonth() ? monthLabel(PS.month) + ' (আজ পর্যন্ত)' : monthLabel(PS.month) + ' (' + monthRangeText(PS.month) + ')'));
   const rows = list.map(a => `<tr>
     <td>${esc(a.name)}</td><td>${esc(a.cat)}</td><td class="cell-num"><b>${a.qty>0 ? psQty(a) : '—'}</b></td><td class="cell-num">${a.ords.size||'—'}</td>
     <td class="cell-num">${a.rev>0 ? money(r2(a.rev)) : '—'}</td>${admin ? `<td class="cell-num">${a.qty>0 ? money(r2(a.rev-a.cogs)) : '—'}</td>` : ''}
@@ -2100,7 +2198,7 @@ async function restoreServerBackup(tag){
     const names = ['products','orders','purchases','expenses','returns','shareholders','contributions','closings'].filter(n => data[n] && Array.isArray(data[n].items));
     if(!names.length){ alert('এই ব্যাকআপে ডেটা পাওয়া যায়নি'); return; }
     const sum = names.map(n => `${n}: ${data[n].items.length}টি`).join('\n');
-    if(!confirm(`${tag}-এর ব্যাকআপ থেকে ফেরত আনবেন?\n\n${sum}\n\nবর্তমান ডেটা এই ডেটা দিয়ে প্রতিস্থাপিত হবে (পিন অপরিবর্তিত থাকবে)। আগে বর্তমান ডেটার একটা ফাইল ব্যাকআপ নিজে থেকে নামবে।`)) return;
+    if(!confirm(`${tag}-এর ব্যাকআপ থেকে ফেরত আনবেন?\n\n${sum}\n\nবর্তমান ডেটা এই ডেটা দিয়ে প্রতিস্থাপিত হবে (লগইন তথ্য ও পাসওয়ার্ড অপরিবর্তিত থাকবে)। আগে বর্তমান ডেটার একটা ফাইল ব্যাকআপ নিজে থেকে নামবে।`)) return;
     try{ downloadBackup(); }catch(e){}
     FORCE_SAVE = true;
     names.forEach(n => saveCollection(n, data[n].items));
@@ -2142,11 +2240,11 @@ function renderDashboard(){
   const products = CACHE.products;
   const orders = CACHE.orders;
   const expenses = CACHE.expenses;
-  const month = todayStr().slice(0,7);
-  const monthOrders = orders.filter(o => o.date && o.date.slice(0,7)===month && o.status==='Delivered');
+  const month = curMonth(), monthTxt = monthLabel(month) + ' · ' + monthRangeText(month);
+  const monthOrders = orders.filter(o => o.date && mOf(o.date)===month && o.status==='Delivered');
   const totalSalesMonth = monthOrders.reduce((s,o)=>s+Number(o.total||0),0);
-  const monthExpenses = expenses.filter(e=>e.kind!=='income' && e.date && e.date.slice(0,7)===month).reduce((s,e)=>s+Number(e.amount||0),0);
-  const monthIncome = expenses.filter(e=>e.kind==='income' && e.date && e.date.slice(0,7)===month).reduce((s,e)=>s+Number(e.amount||0),0);
+  const monthExpenses = expenses.filter(e=>e.kind!=='income' && e.date && mOf(e.date)===month).reduce((s,e)=>s+Number(e.amount||0),0);
+  const monthIncome = expenses.filter(e=>e.kind==='income' && e.date && mOf(e.date)===month).reduce((s,e)=>s+Number(e.amount||0),0);
   const cogs = monthOrders.reduce((s,o)=> s + orderItems(o).reduce((s2,it)=>{ const p=products.find(p=>p.id===it.productId); return s2 + (p?p.cost:0)*Number(it.qty||0); },0), 0);
   const netProfit = totalSalesMonth - cogs - monthExpenses + monthIncome;
   const lowStock = products.filter(p=>!p.hidden && Number(p.stock) <= Number(p.minStock));
@@ -2158,14 +2256,14 @@ function renderDashboard(){
   const hiddenCount = products.filter(p=>p.hidden).length;
 
   let cards = `
-    <div class="stat-card accent"><div class="label">এই মাসের বিক্রয় (ডেলিভারড)</div><div class="value">${money(totalSalesMonth)}</div></div>
-    <div class="stat-card warn"><div class="label">এই মাসের খরচ</div><div class="value">${money(monthExpenses)}</div></div>
+    <div class="stat-card accent"><div class="label">এই মাসের বিক্রয় (ডেলিভারড)</div><div class="value">${money(totalSalesMonth)}</div><div class="sub">${monthTxt}</div></div>
+    <div class="stat-card warn"><div class="label">এই মাসের খরচ</div><div class="value">${money(monthExpenses)}</div><div class="sub">${monthTxt}</div></div>
     <div class="stat-card ${lowStock.length?'danger':''}"><div class="label">কম স্টকের পণ্য</div><div class="value">${lowStock.length} টি</div></div>
     <div class="stat-card"><div class="label">পেন্ডিং/প্রসেসিং অর্ডার</div><div class="value">${pending.length} টি</div></div>
   `;
   cards = stockCard + cards;
   if(session.role==='admin'){
-    cards = `<div class="stat-card"><div class="label">এই মাসের নিট লাভ</div><div class="value">${money(netProfit)}</div></div>` + cards;
+    cards = `<div class="stat-card"><div class="label">এই মাসের নিট লাভ</div><div class="value">${money(netProfit)}</div><div class="sub">${monthTxt}</div></div>` + cards;
   }
 
   let html = closingBanner() + safetyBanners() + leafletShortcut() + `<div class="grid grid-4">${cards}</div>`;
@@ -2491,7 +2589,7 @@ function renderOrders(){
   const session = getSession();
   const orders = CACHE.orders.filter(o => ORD_MONTH==='all' || mOf(o.date)===ORD_MONTH);
   const products = CACHE.products;
-  const isDelivery = session.role==='delivery';
+  const isDelivery = false;   // ডেলিভারি ম্যান রোল তুলে দেওয়া হয়েছে
   const canSeeMoney = !isDelivery;
 
   function itemsSummary(o){
@@ -3869,7 +3967,7 @@ function investPanelHtml(m, d, carryEnd){
   const buy = r2(CACHE.purchases.filter(pu => mOf(pu.date)===m).reduce((t,pu) => t + Number(pu.totalCost||0), 0));
   const entries = CACHE.investments.filter(x => mOf(x.date)===m).slice().sort((a,b) => a.date < b.date ? 1 : -1);
   const locked = isMonthLocked(m), ed = INV_EDIT ? CACHE.investments.find(x => x.id===INV_EDIT) : null;
-  const defDate = ed ? ed.date : (m===curMonth() ? '' : m + '-01');
+  const defDate = ed ? ed.date : (m===curMonth() ? '' : monthStart(m));
   const neg = v => v>=0 ? '' : 'color:#B3261E;';
   return `
     <div class="panel">
@@ -4128,6 +4226,210 @@ function shareWhatsapp(orderId){
 }
 
 /* ============================================================
+   USERS — অ্যাডমিন ও ম্যানেজার: লগইন তথ্য, পাসওয়ার্ড বদল ও রিসেট
+   ============================================================ */
+function askPassword(title, note){
+  return new Promise(resolve => {
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(10,20,35,.55);display:flex;align-items:center;justify-content:center;padding:16px;';
+    ov.innerHTML = `<div class="panel" style="max-width:380px;width:100%;margin:0;"><h3>${esc(title)}</h3>${note ? `<p style="font-size:13px;color:var(--text-muted);margin:0 0 10px;">${esc(note)}</p>` : ''}<div class="form-field"><label>পাসওয়ার্ড</label><input type="password" id="apInput" autocomplete="current-password"></div><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px;"><button class="btn btn-outline btn-sm" id="apNo">বাতিল</button><button class="btn btn-primary btn-sm" id="apYes">নিশ্চিত করুন</button></div></div>`;
+    document.body.appendChild(ov);
+    const inp = ov.querySelector('#apInput');
+    const done = v => { ov.remove(); resolve(v); };
+    ov.querySelector('#apNo').onclick = () => done(null);
+    ov.querySelector('#apYes').onclick = () => done(inp.value);
+    inp.addEventListener('keydown', e => { if(e.key==='Enter') done(inp.value); if(e.key==='Escape') done(null); });
+    setTimeout(() => inp.focus(), 50);
+  });
+}
+async function confirmAdminPassword(note){
+  if(!isAdmin()) return false;
+  const p = await askPassword('অ্যাডমিন পাসওয়ার্ড দিন', note);
+  if(p===null) return false;
+  let ok = false;
+  try{ ok = await checkPass(CACHE.users.admin, p); }catch(e){ alert(e.message || e); return false; }
+  if(!ok) alert('ভুল পাসওয়ার্ড — কিছু বদলানো হয়নি।');
+  return ok;
+}
+function genPassword(){
+  const ch = 'abcdefghjkmnpqrstuvwxyz23456789', a = crypto.getRandomValues(new Uint8Array(8));
+  return Array.from(a, x => ch[x % ch.length]).join('');
+}
+function fillRandomPass(id){ const el = document.getElementById(id); if(el){ el.value = genPassword(); el.type = 'text'; } }
+function userIdTaken(role, id){
+  const other = role==='admin' ? 'manager' : 'admin', u = CACHE.users[other];
+  return hasCreds(u) && normLoginId(u.loginId)===id;
+}
+function readIdField(elId){
+  const id = normLoginId((document.getElementById(elId)||{}).value);
+  if(!validLoginId(id)){ alert('সঠিক ইমেইল (যেমন name@gmail.com) অথবা ১১ সংখ্যার মোবাইল নম্বর (০১XXXXXXXXX) লিখুন।'); return null; }
+  return id;
+}
+
+/* প্রথমবার সেটআপ: অ্যাডমিন (এবং চাইলে ম্যানেজার) এর ইমেইল/ফোন ও পাসওয়ার্ড */
+function renderSetup(){
+  currentPage = '__setup';
+  document.getElementById('pageTitle').textContent = 'প্রথমবার সেটআপ';
+  const eb = document.getElementById('exportBtns'); if(eb) eb.classList.add('hidden');
+  document.getElementById('sideNav').innerHTML = '';
+  document.getElementById('sessionInfo').textContent = 'লগইন: অ্যাডমিন (সেটআপ বাকি)';
+  const f = (id, label, type, ph) => `<div class="form-field"><label>${label}</label><input id="${id}" type="${type||'text'}" placeholder="${ph||''}" autocomplete="off"></div>`;
+  document.getElementById('pageContent').innerHTML = `
+    <div class="panel">
+      <h3>🔐 নতুন লগইন চালু করুন</h3>
+      <p style="font-size:13.5px;">এখন থেকে পিনের বদলে <b>ইমেইল বা মোবাইল নম্বর + পাসওয়ার্ড</b> দিয়ে লগইন হবে। ব্যবহারকারী দুইজন: অ্যাডমিন ও ম্যানেজার। আপনার কোনো ডেটা (পণ্য, অর্ডার, ক্রয়, খরচ ইত্যাদি) এতে বদলাবে না।</p>
+      <h4>👤 অ্যাডমিন (আপনি)</h4>
+      <div class="form-grid">
+        ${f('su_a_name','নাম (ঐচ্ছিক)','text','যেমন: নায়েম')}
+        ${f('su_a_id','ইমেইল অথবা মোবাইল নম্বর','text','name@gmail.com অথবা 01XXXXXXXXX')}
+        ${f('su_a_p1','পাসওয়ার্ড (কমপক্ষে ৬ অক্ষর)','password')}
+        ${f('su_a_p2','পাসওয়ার্ড আবার লিখুন','password')}
+      </div>
+      <h4 style="margin-top:18px;">🧑‍💼 ম্যানেজার <span class="muted-cell" style="font-weight:400;">(ঐচ্ছিক — এখন না দিলে পরে সেটিংস থেকে দিতে পারবেন)</span></h4>
+      <div class="form-grid">
+        ${f('su_m_name','নাম (ঐচ্ছিক)','text')}
+        ${f('su_m_id','ইমেইল অথবা মোবাইল নম্বর','text','name@gmail.com অথবা 01XXXXXXXXX')}
+        <div class="form-field"><label>পাসওয়ার্ড (কমপক্ষে ৬ অক্ষর)</label><div style="display:flex;gap:6px;"><input id="su_m_p1" type="password" autocomplete="off" style="flex:1;"><button class="btn btn-outline btn-sm" type="button" onclick="fillRandomPass('su_m_p1')" title="র‍্যান্ডম পাসওয়ার্ড বানান">🎲</button></div></div>
+      </div>
+      <p class="error-text" id="setupMsg"></p>
+      <button class="btn btn-primary" id="setupBtn" onclick="saveSetup()">✅ সংরক্ষণ করে শুরু করুন</button>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:10px;">পাসওয়ার্ড ভুলে গেলে অ্যাডমিন সেটিংস থেকে ম্যানেজারের পাসওয়ার্ড রিসেট করতে পারবেন। অ্যাডমিন নিজে ভুলে গেলে ম্যানুয়ালের "অ্যাডমিনের পাসওয়ার্ড ভুলে গেলে" অংশ দেখুন।</p>
+    </div>`;
+}
+async function saveSetup(){
+  const msg = document.getElementById('setupMsg'), btn = document.getElementById('setupBtn'), g = id => (document.getElementById(id)||{value:''}).value;
+  msg.textContent = '';
+  if(!needsSetup()){ go('dashboard'); return; }
+  const aId = normLoginId(g('su_a_id')), p1 = g('su_a_p1'), p2 = g('su_a_p2');
+  if(!validLoginId(aId)){ msg.textContent = 'অ্যাডমিনের সঠিক ইমেইল বা ১১ সংখ্যার মোবাইল নম্বর (০১XXXXXXXXX) লিখুন।'; return; }
+  if(p1.length < 6){ msg.textContent = 'অ্যাডমিনের পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।'; return; }
+  if(p1 !== p2){ msg.textContent = 'অ্যাডমিনের দুটি পাসওয়ার্ড মিলছে না।'; return; }
+  const mIdRaw = g('su_m_id').trim(), mPass = g('su_m_p1');
+  let mId = '';
+  if(mIdRaw || mPass){
+    mId = normLoginId(mIdRaw);
+    if(!validLoginId(mId)){ msg.textContent = 'ম্যানেজারের সঠিক ইমেইল বা ১১ সংখ্যার মোবাইল নম্বর লিখুন (অথবা ম্যানেজারের ঘরগুলো ফাঁকা রাখুন)।'; return; }
+    if(mPass.length < 6){ msg.textContent = 'ম্যানেজারের পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।'; return; }
+    if(mId === aId){ msg.textContent = 'অ্যাডমিন ও ম্যানেজারের ইমেইল/ফোন আলাদা হতে হবে।'; return; }
+  }
+  btn.disabled = true; msg.style.color = 'var(--text-muted)'; msg.textContent = 'সংরক্ষণ হচ্ছে...';
+  try{
+    const users = {...CACHE.users};
+    users.admin = {...(users.admin||{}), name:g('su_a_name').trim(), loginId:aId, ...(await makeCred(p1)), v:1, credAt:new Date().toISOString()};
+    if(mId) users.manager = {...(users.manager||{}), name:g('su_m_name').trim(), loginId:mId, ...(await makeCred(mPass)), v:1, credAt:new Date().toISOString()};
+    saveUsers(users);
+    saveSession('admin');
+    msg.style.color = ''; msg.textContent = '';
+    alert('✅ নতুন লগইন চালু হয়েছে।\n\nএখন থেকে ইমেইল/ফোন ও পাসওয়ার্ড দিয়ে ঢুকবেন।' + (mId ? '' : '\nম্যানেজারের লগইন পরে সেটিংস → "ব্যবহারকারী ও পাসওয়ার্ড" থেকে দিন।'));
+    go('dashboard');
+  }catch(e){ msg.style.color = ''; msg.textContent = e.message || String(e); }
+  finally{ btn.disabled = false; }
+}
+
+/* সেটিংসের "ব্যবহারকারী ও পাসওয়ার্ড" অংশ (শুধু অ্যাডমিন) */
+function usersPanelHtml(){
+  const a = CACHE.users.admin || {}, m = CACHE.users.manager || {};
+  const mBadge = hasCreds(m) ? '<span class="badge badge-open">লগইন চালু</span>' : '<span class="badge badge-pending">লগইন তথ্য দেওয়া হয়নি</span>';
+  return `
+    <div class="panel" id="usersPanel">
+      <h3>ব্যবহারকারী ও পাসওয়ার্ড</h3>
+      <p style="font-size:12.5px;color:var(--text-muted);">মোট দুইজন ব্যবহারকারী: অ্যাডমিন ও ম্যানেজার। ইমেইল অথবা ১১ সংখ্যার মোবাইল নম্বর (০১XXXXXXXXX) + পাসওয়ার্ড দিয়ে লগইন হয়।</p>
+      <h4>👤 অ্যাডমিন (আপনি)</h4>
+      <div class="form-grid">
+        <div class="form-field"><label>নাম</label><input id="u_a_name" value="${esc(a.name||'')}"></div>
+        <div class="form-field"><label>ইমেইল / মোবাইল নম্বর</label><input id="u_a_id" value="${esc(a.loginId||'')}"></div>
+        <div class="form-field"><label>বর্তমান পাসওয়ার্ড (বদলাতে হলে বাধ্যতামূলক)</label><input id="u_a_cur" type="password" autocomplete="current-password"></div>
+        <div class="form-field"><label>নতুন পাসওয়ার্ড (বদলাতে চাইলে; কমপক্ষে ৬ অক্ষর)</label><input id="u_a_new" type="password" autocomplete="new-password"></div>
+      </div>
+      <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="saveAdminSelf()">💾 অ্যাডমিনের তথ্য সংরক্ষণ</button>
+      <hr style="border:none;border-top:1px solid var(--border);margin:18px 0;">
+      <h4>🧑‍💼 ম্যানেজার ${mBadge}</h4>
+      <div class="form-grid">
+        <div class="form-field"><label>নাম</label><input id="u_m_name" value="${esc(m.name||'')}"></div>
+        <div class="form-field"><label>ইমেইল / মোবাইল নম্বর</label><input id="u_m_id" value="${esc(m.loginId||'')}"></div>
+        <div class="form-field span-2"><label>${hasCreds(m) ? '🔑 পাসওয়ার্ড রিসেট — নতুন পাসওয়ার্ড (বদলাতে না চাইলে ফাঁকা রাখুন)' : 'পাসওয়ার্ড দিন (কমপক্ষে ৬ অক্ষর)'}</label>
+          <div style="display:flex;gap:6px;"><input id="u_m_new" type="password" autocomplete="new-password" style="flex:1;"><button class="btn btn-outline btn-sm" type="button" onclick="fillRandomPass('u_m_new')" title="র‍্যান্ডম পাসওয়ার্ড বানান">🎲 র‍্যান্ডম</button></div></div>
+      </div>
+      <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="saveManager()">💾 ম্যানেজারের তথ্য সংরক্ষণ / পাসওয়ার্ড রিসেট</button>
+      <div class="flash warn" style="margin-top:16px;font-size:13px;">
+        <b>ম্যানেজার পাসওয়ার্ড ভুলে গেলে — অ্যাডমিন যেভাবে রিসেট করবেন:</b>
+        <ol style="margin:6px 0 0;padding-left:20px;">
+          <li>অ্যাডমিন হিসেবে লগইন করে <b>সেটিংস → ব্যবহারকারী ও পাসওয়ার্ড</b> খুলুন।</li>
+          <li>ম্যানেজারের অংশে "নতুন পাসওয়ার্ড" ঘরে নতুন একটি পাসওয়ার্ড লিখুন (অথবা 🎲 চেপে বানিয়ে নিন)।</li>
+          <li>"ম্যানেজারের তথ্য সংরক্ষণ / পাসওয়ার্ড রিসেট" চাপুন, নিজের অ্যাডমিন পাসওয়ার্ড দিয়ে নিশ্চিত করুন।</li>
+          <li>নতুন পাসওয়ার্ডটি ম্যানেজারকে জানান। ম্যানেজারের পুরোনো পাসওয়ার্ড ও সব ডিভাইসের লগইন সাথে সাথে বন্ধ হয়ে যাবে; সে নতুন পাসওয়ার্ড দিয়ে ঢুকবে (চাইলে সাইডবারের "🔑 পাসওয়ার্ড বদলান" থেকে নিজের পছন্দেরটা দিতে পারবে)।</li>
+        </ol>
+      </div>
+    </div>`;
+}
+async function saveAdminSelf(){
+  const g = id => (document.getElementById(id)||{value:''}).value;
+  const id = readIdField('u_a_id'); if(id===null) return;
+  if(userIdTaken('admin', id)){ alert('এই ইমেইল/ফোন ম্যানেজারের জন্য আছে — আলাদা দিন।'); return; }
+  const cur = g('u_a_cur'), np = g('u_a_new');
+  if(!cur){ alert('তথ্য বদলাতে বর্তমান পাসওয়ার্ড লিখুন।'); return; }
+  if(np && np.length < 6){ alert('নতুন পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।'); return; }
+  try{
+    if(!(await checkPass(CACHE.users.admin, cur))){ alert('বর্তমান পাসওয়ার্ড ভুল — কিছু বদলানো হয়নি।'); return; }
+    const patch = {name:g('u_a_name').trim(), loginId:id};
+    if(np){ Object.assign(patch, await makeCred(np), {v:Number(CACHE.users.admin.v||1)+1, credAt:new Date().toISOString()}); }
+    patchUser('admin', patch);
+    if(np) saveSession('admin');   // নিজের লগইন চালু থাকবে, অন্য ডিভাইসের পুরোনো লগইন বন্ধ হবে
+    alert(np ? '✅ অ্যাডমিনের তথ্য ও পাসওয়ার্ড বদলানো হয়েছে।' : '✅ অ্যাডমিনের তথ্য সংরক্ষিত হয়েছে।');
+    renderSettings(); renderNav();
+  }catch(e){ alert(e.message || e); }
+}
+async function saveManager(){
+  const g = id => (document.getElementById(id)||{value:''}).value;
+  const m = CACHE.users.manager || {};
+  const id = readIdField('u_m_id'); if(id===null) return;
+  if(userIdTaken('manager', id)){ alert('এই ইমেইল/ফোন অ্যাডমিনের জন্য আছে — আলাদা দিন।'); return; }
+  const np = g('u_m_new');
+  if(!hasCreds(m) && !np){ alert('ম্যানেজারের জন্য পাসওয়ার্ড দিন (কমপক্ষে ৬ অক্ষর)।'); return; }
+  if(np && np.length < 6){ alert('পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।'); return; }
+  const idChanged = hasCreds(m) && normLoginId(m.loginId) !== id;
+  if(!(await confirmAdminPassword(np ? 'ম্যানেজারের পাসওয়ার্ড রিসেট করতে নিজের অ্যাডমিন পাসওয়ার্ড দিন।' : 'ম্যানেজারের তথ্য বদলাতে নিজের অ্যাডমিন পাসওয়ার্ড দিন।'))) return;
+  try{
+    const patch = {name:g('u_m_name').trim(), loginId:id};
+    if(np) Object.assign(patch, await makeCred(np), {v:(hasCreds(m) ? Number(m.v||1)+1 : 1), credAt:new Date().toISOString()});
+    else if(idChanged) patch.v = Number(m.v||1)+1;   // ইমেইল/ফোন বদলালে পুরোনো লগইন বন্ধ
+    patchUser('manager', patch);
+    alert(np ? `✅ ম্যানেজারের পাসওয়ার্ড রিসেট হয়েছে।\n\nনতুন পাসওয়ার্ড: ${np}\nলগইন: ${id}\n\nএটি ম্যানেজারকে জানান। তার আগের সব লগইন বন্ধ হয়ে গেছে।` : '✅ ম্যানেজারের তথ্য সংরক্ষিত হয়েছে।');
+    renderSettings();
+  }catch(e){ alert(e.message || e); }
+}
+/* নিজের পাসওয়ার্ড বদল (অ্যাডমিন ও ম্যানেজার দুজনেই — সাইডবারের বাটন থেকে) */
+function openChangePassword(){
+  const s = getSession(); if(!s) return;
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(10,20,35,.55);display:flex;align-items:center;justify-content:center;padding:16px;';
+  ov.innerHTML = `<div class="panel" style="max-width:380px;width:100%;margin:0;"><h3>🔑 পাসওয়ার্ড বদলান</h3>
+    <div class="form-field"><label>বর্তমান পাসওয়ার্ড</label><input type="password" id="cp_old" autocomplete="current-password"></div>
+    <div class="form-field" style="margin-top:10px;"><label>নতুন পাসওয়ার্ড (কমপক্ষে ৬ অক্ষর)</label><input type="password" id="cp_new" autocomplete="new-password"></div>
+    <div class="form-field" style="margin-top:10px;"><label>নতুন পাসওয়ার্ড আবার</label><input type="password" id="cp_new2" autocomplete="new-password"></div>
+    <p class="error-text" id="cp_err"></p>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;"><button class="btn btn-outline btn-sm" id="cp_no">বাতিল</button><button class="btn btn-primary btn-sm" id="cp_yes">বদলান</button></div></div>`;
+  document.body.appendChild(ov);
+  const q = id => ov.querySelector('#'+id), err = q('cp_err');
+  q('cp_no').onclick = () => ov.remove();
+  q('cp_yes').onclick = async () => {
+    const o = q('cp_old').value, n = q('cp_new').value, n2 = q('cp_new2').value;
+    if(!o || !n){ err.textContent = 'সব ঘর পূরণ করুন।'; return; }
+    if(n.length < 6){ err.textContent = 'নতুন পাসওয়ার্ড কমপক্ষে ৬ অক্ষরের হতে হবে।'; return; }
+    if(n !== n2){ err.textContent = 'নতুন পাসওয়ার্ড দুটি মিলছে না।'; return; }
+    q('cp_yes').disabled = true;
+    try{
+      const u = CACHE.users[s.role];
+      if(!(await checkPass(u, o))){ err.textContent = 'বর্তমান পাসওয়ার্ড ভুল।'; q('cp_yes').disabled = false; return; }
+      patchUser(s.role, {...(await makeCred(n)), v:Number(u.v||1)+1, credAt:new Date().toISOString()});
+      saveSession(s.role);
+      ov.remove(); alert('✅ পাসওয়ার্ড বদলানো হয়েছে। অন্য ডিভাইসে পুরোনো পাসওয়ার্ডের লগইন বন্ধ হয়ে যাবে।');
+    }catch(e){ err.textContent = e.message || String(e); q('cp_yes').disabled = false; }
+  };
+  setTimeout(() => q('cp_old').focus(), 50);
+}
+
+/* ============================================================
    SETTINGS (admin only)
    ============================================================ */
 function renderSettings(){
@@ -4168,15 +4470,7 @@ function renderSettings(){
         <h3 style="margin-top:18px;">ডেটা ব্যবহার (প্রতিটি তথ্যের সীমা ১ MB)</h3>
         ${dataUsageHtml()}
       </div>
-      <div class="panel">
-        <h3>পিন পরিবর্তন করুন</h3>
-        <div class="form-grid">
-          <div class="form-field"><label>Admin PIN</label><input id="s_pin_admin" value="${users.admin.pin}"></div>
-          <div class="form-field"><label>Manager PIN</label><input id="s_pin_manager" value="${users.manager.pin}"></div>
-          <div class="form-field"><label>Delivery PIN</label><input id="s_pin_delivery" value="${users.delivery.pin}"></div>
-        </div>
-        <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="savePins()">পিন সংরক্ষণ করুন</button>
-      </div>
+      ${usersPanelHtml()}
       <div class="panel">
         <h3>পণ্যের ক্যাটাগরি ম্যানেজ করুন</h3>
         <div style="margin-bottom:10px;">${categoryChips(settings.productCategories, 'removeProductCategory')}</div>
@@ -4201,7 +4495,7 @@ function renderSettings(){
           <button class="btn btn-outline btn-sm" onclick="document.getElementById('restoreFileInput').click()">📤 ব্যাকআপ থেকে ডেটা ফিরিয়ে আনুন</button>
           <input type="file" id="restoreFileInput" accept=".json,application/json" class="hidden" onchange="restoreBackup(event)">
         </div>
-        <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">রিস্টোর করলে বর্তমান সব ডেটা ব্যাকআপ ফাইলের ডেটা দিয়ে প্রতিস্থাপিত হবে (পিন অপরিবর্তিত থাকবে)। রিস্টোরের আগে বর্তমান ডেটার একটা ব্যাকআপ নিজে থেকেই ডাউনলোড হয়ে যাবে।</p>
+        <p style="font-size:12px;color:var(--text-muted);margin-top:8px;">রিস্টোর করলে বর্তমান সব ডেটা ব্যাকআপ ফাইলের ডেটা দিয়ে প্রতিস্থাপিত হবে (লগইন তথ্য ও পাসওয়ার্ড অপরিবর্তিত থাকবে)। রিস্টোরের আগে বর্তমান ডেটার একটা ব্যাকআপ নিজে থেকেই ডাউনলোড হয়ে যাবে।</p>
       </div>
     </div>
   `;
@@ -4237,15 +4531,6 @@ function saveDividend(){
   settings.dividendPercent = Number(document.getElementById('s_dividend').value||0);
   saveSettings(settings);
   alert('সংরক্ষিত হয়েছে');
-}
-function savePins(){
-  const users = {
-    admin:{pin: document.getElementById('s_pin_admin').value.trim()},
-    manager:{pin: document.getElementById('s_pin_manager').value.trim()},
-    delivery:{pin: document.getElementById('s_pin_delivery').value.trim()}
-  };
-  saveUsers(users);
-  alert('পিন আপডেট হয়েছে');
 }
 function addProductCategory(){
   const input = document.getElementById('s_new_pcat');
@@ -4390,8 +4675,8 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৪.৬';
-const APP_UPDATED_FALLBACK = '2026-10-01T20:00:00+06:00';
+const APP_VERSION = '৫.০';
+const APP_UPDATED_FALLBACK = '2026-10-21T14:00:00+06:00';
 function fmtUpdated(d){
   try{
     return new Intl.DateTimeFormat('bn-BD', {timeZone:'Asia/Dhaka', day:'numeric', month:'long', year:'numeric', hour:'numeric', minute:'2-digit', hour12:true}).format(d);
