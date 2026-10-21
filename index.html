@@ -14,7 +14,7 @@
 <meta name="theme-color" content="#123C69">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=5.0">
+<link rel="stylesheet" href="style.css?v=5.1">
 </head>
 <body>
 
@@ -35,9 +35,8 @@
         <input type="password" id="loginPass" placeholder="আপনার পাসওয়ার্ড" autocomplete="current-password" onkeydown="if(event.key==='Enter')handleLogin()">
       </div>
       <button id="loginBtn" class="btn btn-primary btn-block" onclick="handleLogin()">প্রবেশ করুন</button>
-      <p class="hint-text" style="margin-top:10px;">পাসওয়ার্ড ভুলে গেলে অ্যাডমিনের সাথে যোগাযোগ করুন — অ্যাডমিন নতুন পাসওয়ার্ড দিয়ে দেবেন।</p>
       <div id="loginSetupBox" class="hidden" style="margin-top:14px;padding-top:14px;border-top:1px dashed var(--border);">
-        <p class="hint-text" style="margin:0 0 8px;"><b>প্রথমবার সেটআপ (শুধু অ্যাডমিন):</b> নতুন লগইন এখনো চালু হয়নি। পুরোনো অ্যাডমিন পিন দিয়ে ঢুকে নিজের ইমেইল/ফোন ও পাসওয়ার্ড ঠিক করুন।</p>
+        <p class="hint-text" style="margin:0 0 8px;"><b>অ্যাডমিন সেটআপ</b></p>
         <div class="field-group"><input type="password" id="loginPin" placeholder="পুরোনো অ্যাডমিন পিন" inputmode="numeric" maxlength="6" onkeydown="if(event.key==='Enter')handleSetupLogin()"></div>
         <button class="btn btn-outline btn-block" onclick="handleSetupLogin()">পিন দিয়ে সেটআপে যান</button>
       </div>
@@ -45,7 +44,6 @@
     <p id="loginError" class="error-text"></p>
     <button id="installBtnLogin" class="btn btn-outline btn-block install-btn hidden" onclick="installApp()">📲 অ্যাপ হিসেবে ইনস্টল করুন</button>
     <p id="iosHint" class="hint-text hidden">iPhone/iPad-এ: Safari-র শেয়ার (⬆️) বাটন চেপে "Add to Home Screen" বেছে নিন।</p>
-    <p class="hint-text" style="margin-top:10px;"><a href="manual.html" target="_blank">📖 ব্যবহার নির্দেশিকা দেখুন</a></p>
     <p id="appVersionLogin" class="hint-text" style="margin-top:10px;"></p>
     <p id="loginStatus" class="hint-text">☁️ ক্লাউড ডেটাবেজের সাথে সংযোগ করা হচ্ছে...</p>
   </div>
@@ -67,7 +65,7 @@
     <div class="sidebar-footer">
       <div id="sessionInfo" class="session-info"></div>
       <div id="appVersionSide" class="session-info" style="opacity:.85;"></div>
-      <a class="btn btn-ghost btn-block" href="manual.html" target="_blank" style="margin-bottom:8px;font-size:13px;text-decoration:none;display:block;text-align:center;">📖 ব্যবহার নির্দেশিকা</a>
+      <a id="manualLink" class="btn btn-ghost btn-block hidden" href="manual.html" target="_blank" style="margin-bottom:8px;font-size:13px;text-decoration:none;display:block;text-align:center;">📖 ব্যবহার নির্দেশিকা</a>
       <button class="btn btn-ghost btn-block" onclick="openChangePassword()" style="margin-bottom:8px;font-size:13px;">🔑 পাসওয়ার্ড বদলান</button>
       <button class="btn btn-ghost btn-block" onclick="forceRefreshApp()" style="margin-bottom:8px;font-size:13px;">🔄 নতুন সংস্করণ লোড করুন</button>
       <button id="installBtnSide" class="btn btn-ghost btn-block install-btn hidden" onclick="installApp()" style="margin-bottom:8px;">📲 অ্যাপ ইনস্টল করুন</button>
@@ -98,6 +96,6 @@
 <script src="firebase-config.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=5.0"></script>
+<script src="app.js?v=5.1"></script>
 </body>
 </html>

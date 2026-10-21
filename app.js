@@ -588,6 +588,7 @@ function renderNav(){
       <span>${i.label}</span><span>${i.icon}</span>
     </button>`).join('');
 
+  { const ml = document.getElementById('manualLink'); if(ml) ml.classList.toggle('hidden', session.role!=='admin'); }   // নির্দেশিকা শুধু অ্যাডমিনের জন্য
   const u = (CACHE.users||{})[session.role] || {};
   document.getElementById('sessionInfo').textContent = 'লগইন: ' + ROLE_BN[session.role] + (u.name ? ' (' + u.name + ')' : '') + ' · ☁️ লাইভ';
 }
@@ -4675,7 +4676,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৫.০';
+const APP_VERSION = '৫.১';
 const APP_UPDATED_FALLBACK = '2026-10-21T14:00:00+06:00';
 function fmtUpdated(d){
   try{

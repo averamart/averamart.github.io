@@ -31,7 +31,8 @@ kbd{background:#eee;border:1px solid #ccc;border-radius:4px;padding:0 6px;font-s
 </style>
 </head>
 <body>
-<div class="wrap">
+<div id="gateMsg" style="display:none;max-width:480px;margin:80px auto;padding:20px;text-align:center;background:#fff;border:1px solid #E4E0D4;border-radius:10px;">🔒 এই নির্দেশিকা শুধু অ্যাডমিনের জন্য। অ্যাপে অ্যাডমিন হিসেবে লগইন করে সাইডবারের "📖 ব্যবহার নির্দেশিকা" থেকে খুলুন।<br><br><a href="index.html">← অ্যাপে যান</a></div>
+<div class="wrap" id="manualWrap" style="display:none;">
 <header><img src="logo.jpg" alt=""><div><h1>Avera Mart — ব্যবহার নির্দেশিকা</h1><p class="sub" style="margin:0;">দোকানের হিসাব, বিক্রি ও স্টক পরিচালনার ধাপে ধাপে গাইড</p></div></header>
 <a class="btnp" href="index.html">← অ্যাপে ফিরুন</a><a class="btnp" href="#" onclick="window.print();return false;">🖨️ প্রিন্ট / PDF</a>
 
@@ -287,5 +288,12 @@ kbd{background:#eee;border:1px solid #ccc;border-radius:4px;padding:0 6px;font-s
 <li>অক্টোবর মাস লক করা যাবে ১৬ নভেম্বর থেকে (মাস শেষ হওয়ার পর)।</li>
 <li>ক্যাটালগের কভারের তারিখ ও সার্ভার ব্যাকআপের তারিখ আগের মতো ক্যালেন্ডার মাসেই থাকে।</li>
 </ul>
+<script>
+(function(){
+  var ok=false;
+  try{ var s=JSON.parse(localStorage.getItem('AM_session')||'null'); ok=!!(s&&s.role==='admin'); }catch(e){}
+  document.getElementById(ok?'manualWrap':'gateMsg').style.display='block';
+})();
+</script>
 </body>
 </html>
