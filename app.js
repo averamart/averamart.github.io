@@ -1510,7 +1510,7 @@ const CAT_IMG = new Map(), CAT_TOC_ROWS = 24;
 function bnYear(y){ return Number(y).toLocaleString('bn-BD', {useGrouping:false}); }
 function catDefaults(){
   const st = CACHE.settings, cm = todayStr().split('-');   // ক্যাটালগের তারিখ ক্যালেন্ডার মাসেই
-  return {title:'পণ্য ক্যাটালগ', dateText: `${BN_MONTHS[Number(cm[1])-1]} ${bnYear(cm[0])}`, perPage:12, showPrice:true, priceList:'retail', hideZero:true, excludeHidden:true, cover:true, toc:true, cats:{},
+  return {title:'পণ্য ক্যাটালগ', dateText: `${BN_MONTHS[Number(cm[1])-1]} ${bnYear(cm[0])}`, perPage:12, showPrice:true, priceList:'retail', hideZero:true, excludeHidden:true, cover:true, toc:true, cats:{}, catOrder:[],
     tagline: st.tagline||'', footerNote:'ফ্রি হোম ডেলিভারি', footerSub: st.website||'', phone: st.phone||'', address: st.businessAddress||'', disclaimer:'দাম পরিবর্তনযোগ্য, স্টক থাকা সাপেক্ষে'};
 }
 function catLoad(){
@@ -1529,10 +1529,25 @@ function catGroups(){
     const c = p.category || 'অন্যান্য'; if(CAT.cats[c]===false) return;
     (map[c] = map[c] || []).push(p);
   });
-  const order = CACHE.settings.productCategories || [], names = Object.keys(map);
-  names.sort((a,b) => { const ia = order.indexOf(a), ib = order.indexOf(b); if(ia>-1 && ib>-1) return ia-ib; if(ia>-1) return -1; if(ib>-1) return 1; return a.localeCompare(b,'bn'); });
+  const names = Object.keys(map);
+  catSortNames(names);
   return names.map(n => ({name:n, items: map[n].slice().sort((a,b) => String(a.name).localeCompare(String(b.name),'bn'))}));
 }
+function catSortNames(names){
+  const mine = CAT.catOrder || [], order = CACHE.settings.productCategories || [];
+  return names.sort((a,b) => {
+    const ma = mine.indexOf(a), mb = mine.indexOf(b);
+    if(ma>-1 && mb>-1) return ma-mb; if(ma>-1) return -1; if(mb>-1) return 1;
+    const ia = order.indexOf(a), ib = order.indexOf(b);
+    if(ia>-1 && ib>-1) return ia-ib; if(ia>-1) return -1; if(ib>-1) return 1;
+    return a.localeCompare(b,'bn');
+  });
+}
+function catMoveCat(i, d){
+  const names = catSortNames(Object.keys(catAllCats())), j = i+d; if(j<0 || j>=names.length) return;
+  [names[i], names[j]] = [names[j], names[i]]; CAT.catOrder = names; catSave(); renderCatalog();
+}
+function catResetOrder(){ CAT.catOrder = []; catSave(); renderCatalog(); }
 function catAllCats(){
   const cnt = {}; CACHE.products.forEach(p => { if(CAT.excludeHidden && p.hidden) return; if(CAT.hideZero && !(Number(p.stock)>0)) return; const c = p.category||'অন্যান্য'; cnt[c] = (cnt[c]||0)+1; });
   return cnt;
@@ -1747,7 +1762,7 @@ function catRefresh(withPreview){
 }
 function renderCatalog(){
   catLoad();
-  const cnt = catAllCats(), names = Object.keys(cnt).sort((a,b) => a.localeCompare(b,'bn')), per = Number(CAT.perPage)||12;
+  const cnt = catAllCats(), names = catSortNames(Object.keys(cnt)), per = Number(CAT.perPage)||12;
   document.getElementById('pageContent').innerHTML = `
     <div class="panel">
       <div class="panel-head"><h3>পণ্য ক্যাটালগ</h3></div>
@@ -1765,9 +1780,15 @@ function renderCatalog(){
       <div class="form-field" style="margin-top:12px;max-width:260px;"><label>প্রতি পাতায় পণ্য</label>
         <select onchange="catSet('perPage',Number(this.value))" style="padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);">
           <option value="12" ${per===12?'selected':''}>১২টি (বড় ছবি)</option><option value="16" ${per===16?'selected':''}>১৬টি</option><option value="20" ${per===20?'selected':''}>২০টি (সবচেয়ে বেশি)</option></select></div>
-      <h4 style="margin:12px 0 4px;">ক্যাটাগরি <span style="font-weight:500;font-size:12px;">(<a href="#" onclick="catAllCatsSet(true);return false;">সব</a> · <a href="#" onclick="catAllCatsSet(false);return false;">কোনোটাই না</a>)</span></h4>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:6px;">
-        ${names.map(n => `<label style="display:flex;gap:8px;align-items:center;font-size:13.5px;"><input type="checkbox" ${CAT.cats[n]===false?'':'checked'} onchange="catToggleCat('${esc(n).replace(/'/g,"\\'")}',this.checked)"> ${esc(n)} <span class="muted-cell">(${cnt[n]})</span></label>`).join('') || '<span class="muted-cell">কোনো পণ্য নেই</span>'}
+      <h4 style="margin:12px 0 4px;">ক্যাটাগরি ও ক্রম <span style="font-weight:500;font-size:12px;">(<a href="#" onclick="catAllCatsSet(true);return false;">সব</a> · <a href="#" onclick="catAllCatsSet(false);return false;">কোনোটাই না</a> · <a href="#" onclick="catResetOrder();return false;">ক্রম রিসেট</a>)</span></h4>
+      <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 6px;">▲ ▼ চেপে ক্যাটাগরির ক্রম ঠিক করুন — ক্যাটালগে উপরেরটা আগে আসবে (যেমন খাবারের পর সাবান-সোডা)।</p>
+      <div style="display:flex;flex-direction:column;gap:5px;max-width:460px;">
+        ${names.map((n,i) => `<div style="display:flex;gap:8px;align-items:center;font-size:13.5px;padding:4px 6px;border:1px solid var(--border);border-radius:8px;background:var(--bg);">
+          <span style="width:22px;color:var(--text-muted);text-align:right;">${bnN(i+1)}.</span>
+          <label style="flex:1;display:flex;gap:8px;align-items:center;min-width:0;"><input type="checkbox" ${CAT.cats[n]===false?'':'checked'} onchange="catToggleCat('${esc(n).replace(/'/g,"\\'")}',this.checked)"> <span>${esc(n)} <span class="muted-cell">(${cnt[n]})</span></span></label>
+          <button class="btn btn-outline btn-sm" style="padding:2px 9px;" onclick="catMoveCat(${i},-1)" ${i===0?'disabled':''}>▲</button>
+          <button class="btn btn-outline btn-sm" style="padding:2px 9px;" onclick="catMoveCat(${i},1)" ${i===names.length-1?'disabled':''}>▼</button>
+        </div>`).join('') || '<span class="muted-cell">কোনো পণ্য নেই</span>'}
       </div>
       <h4 style="margin:14px 0 4px;">ফুটার (নিচের অংশ)</h4>
       <div class="form-grid">
