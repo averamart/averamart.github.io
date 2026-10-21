@@ -1537,14 +1537,33 @@ function catAllCats(){
   const cnt = {}; CACHE.products.forEach(p => { if(CAT.excludeHidden && p.hidden) return; if(CAT.hideZero && !(Number(p.stock)>0)) return; const c = p.category||'অন্যান্য'; cnt[c] = (cnt[c]||0)+1; });
   return cnt;
 }
+function catGeom(){
+  const g = LF_GRIDS[Number(CAT.perPage)] || LF_GRIDS[12];
+  const gx = 30, gy = 214, gapX = 16, gapY = 14, hh = 58, gridH = (LF_H-130-34)-gy;
+  const colW = Math.floor((LF_W-60-gapX*(g.cols-1))/g.cols), rowH = Math.floor((gridH-hh-gapY*g.rows)/g.rows);
+  const sc = Math.max(0.6, Math.min(colW/329, rowH/276, 1));
+  return {g, gx, gy, gapX, gapY, hh, gridH, colW, rowH, sc};
+}
 function catPlan(){
-  const groups = catGroups(), g = LF_GRIDS[Number(CAT.perPage)] || LF_GRIDS[12], per = g.cols*g.rows, catPages = [];
-  groups.forEach(gr => { const parts = Math.ceil(gr.items.length/per); for(let i=0;i<gr.items.length;i+=per) catPages.push({type:'cat', cat:gr.name, items:gr.items.slice(i,i+per), part:i/per+1, parts}); });
+  const groups = catGroups(), G = catGeom(), g = G.g, catPages = [];
+  let cur = null, y = 0;
+  const newPage = () => { cur = {type:'cat', blocks:[]}; y = 0; catPages.push(cur); };
+  // ক্যাটাগরি শেষ হলে একই পাতায় নিচে পরের ক্যাটাগরির শিরোনাম-ব্যান্ড ও পণ্য শুরু হয়; জায়গা না থাকলে পরের পাতায় চলে
+  groups.forEach(gr => {
+    for(let i=0;i<gr.items.length;i+=g.cols){
+      let head = (i===0);
+      if(!cur){ newPage(); head = true; }
+      let need = (head ? G.hh+G.gapY : 0) + G.rowH + G.gapY;
+      if(y + need > G.gridH + G.gapY){ newPage(); head = true; need = G.hh+G.gapY + G.rowH+G.gapY; }
+      if(head){ cur.blocks.push({kind:'head', name:gr.name, cont:i>0, count:gr.items.length}); y += G.hh+G.gapY; }
+      cur.blocks.push({kind:'row', items:gr.items.slice(i, i+g.cols)}); y += G.rowH+G.gapY;
+    }
+  });
   const pages = [], tocN = (CAT.toc && groups.length) ? Math.ceil(groups.length/CAT_TOC_ROWS) : 0;
   if(CAT.cover) pages.push({type:'cover'});
   for(let k=0;k<tocN;k++) pages.push({type:'toc', k});
   catPages.forEach(p => pages.push(p));
-  const starts = {}; pages.forEach((p,i) => { p.no = i+1; if(p.type==='cat' && !(p.cat in starts)) starts[p.cat] = i+1; });
+  const starts = {}; pages.forEach((p,i) => { p.no = i+1; if(p.type==='cat') p.blocks.forEach(bl => { if(bl.kind==='head' && !bl.cont && !(bl.name in starts)) starts[bl.name] = i+1; }); });
   const total = groups.reduce((t,gr) => t + gr.items.length, 0);
   return {pages, groups, starts, g, total};
 }
@@ -1586,16 +1605,14 @@ function catChrome(c, pill, no, total){
   c.textAlign = 'left';
 }
 function catCard(c, p, x, y, w, h, s, img){
-  const out = !(Number(p.stock)>0);
   c.save(); c.shadowColor = 'rgba(18,38,63,.12)'; c.shadowBlur = 12*s; c.shadowOffsetY = 4*s;
   lfRR(c, x, y, w, h, 22*s); c.fillStyle = '#fff'; c.fill(); c.restore();
   const zx = x+8*s, zy = y+8*s, zw = w-16*s, zh = Math.round(h*0.56);
   lfGlow(c, zx, zy, zw, zh);
-  c.save(); if(out) c.globalAlpha = 0.4;
+  c.save();
   if(img) lfContain(c, img, zx+8*s, zy+4*s, zw-16*s, zh-6*s); else lfNoImg(c, p.name, zx, zy, zw, zh);
   c.restore(); c.textBaseline = 'alphabetic';
   lfPill(c, lfUnitLabel(p), x+10*s, zy+zh-(17*s+12)-2, Math.max(12, Math.round(17*s)), 'rgba(238,243,248,.95)', '#4D6079');
-  if(out) lfPill(c, 'স্টক নেই', x+w-10*s-(c.measureText('স্টক নেই').width+22), zy+4, Math.max(12, Math.round(17*s)), '#FDE8E8', '#B3261E');
   const nf = Math.max(14, Math.round(24*s)), lh = Math.round(28*s), ny = zy+zh+Math.round(28*s);
   c.fillStyle = '#12263F'; c.font = lfF(700, nf); c.textAlign = 'left';
   lfWrap(c, p.name, w-24*s, 2).forEach((ln,i) => c.fillText(ln, x+12*s, ny+i*lh));
@@ -1624,7 +1641,7 @@ async function catDrawPage(canvas, pg, plan){
     const sub = catVal('footerSub').trim(); if(sub){ c.font = lfF(700, 26); c.fillText(sub, W/2, yy+4); }
     c.textAlign = 'left'; return;
   }
-  catChrome(c, pg.type==='toc' ? 'সূচিপত্র' : (pg.parts>1 ? `${pg.cat} (${bnN(pg.part)}/${bnN(pg.parts)})` : pg.cat), pg.no, total);
+  catChrome(c, pg.type==='toc' ? 'সূচিপত্র' : 'পণ্য তালিকা', pg.no, total);
   if(pg.type==='toc'){
     const rows = plan.groups.slice(pg.k*CAT_TOC_ROWS, (pg.k+1)*CAT_TOC_ROWS);
     const roomy = rows.length <= 12, step = roomy ? 78 : 46, fs = roomy ? 36 : 30;
@@ -1637,10 +1654,24 @@ async function catDrawPage(canvas, pg, plan){
     });
     c.textAlign = 'left'; return;
   }
-  const g = plan.g, gx = 30, gy = 214, gapX = 16, gapY = 14, gridH = (H-130-34)-gy;
-  const colW = Math.floor((W-60-gapX*(g.cols-1))/g.cols), rowH = Math.floor((gridH-gapY*(g.rows-1))/g.rows), sc = Math.max(0.6, Math.min(colW/329, rowH/276, 1));
-  const imgs = {}; await Promise.all(pg.items.map(async p => { imgs[p.id] = await catImg(p.id); }));
-  pg.items.forEach((p,k) => catCard(c, p, gx+(k%g.cols)*(colW+gapX), gy+Math.floor(k/g.cols)*(rowH+gapY), colW, rowH, sc, imgs[p.id]));
+  const G = catGeom(), g = G.g;
+  const all = []; pg.blocks.forEach(bl => { if(bl.kind==='row') bl.items.forEach(p => all.push(p)); });
+  const imgs = {}; await Promise.all(all.map(async p => { imgs[p.id] = await catImg(p.id); }));
+  let y = G.gy;
+  pg.blocks.forEach(bl => {
+    if(bl.kind==='head'){
+      const gg = c.createLinearGradient(G.gx, 0, LF_W-G.gx, 0); gg.addColorStop(0,'#17539F'); gg.addColorStop(1,'#2DB57A');
+      lfRR(c, G.gx, y, LF_W-2*G.gx, G.hh, 16); c.fillStyle = gg; c.fill();
+      c.fillStyle = '#fff'; c.textAlign = 'left'; c.textBaseline = 'alphabetic';
+      const label = bl.cont ? `${bl.name} (চলমান)` : bl.name;
+      lfFit(c, label, LF_W-2*G.gx-250, 40, 26, 800); c.fillText(label, G.gx+22, y+G.hh/2+13);
+      c.textAlign = 'right'; c.font = lfF(600, 24); c.fillStyle = 'rgba(255,255,255,.92)'; c.fillText(`${bnN(bl.count)}টি পণ্য`, LF_W-G.gx-22, y+G.hh/2+9); c.textAlign = 'left';
+      y += G.hh + G.gapY;
+    } else {
+      bl.items.forEach((p,k) => catCard(c, p, G.gx+k*(G.colW+G.gapX), y, G.colW, G.rowH, G.sc, imgs[p.id]));
+      y += G.rowH + G.gapY;
+    }
+  });
 }
 async function catFonts(){ try{ await Promise.all([document.fonts.load(lfF(800,40),'অআকখগ'), document.fonts.load(lfF(600,24),'অআকখগ'), document.fonts.load(lfF(700,24),'অআকখগ')]); }catch(e){} if(!LF_LOGO) LF_LOGO = await lfLoadImage('logo.jpg'); }
 async function catRenderAll(onProgress){
