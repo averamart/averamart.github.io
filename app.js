@@ -4092,15 +4092,29 @@ function renderProfitLoss(){
 /* ============================================================
    INVOICE
    ============================================================ */
-let INVOICE_PRESELECT = null;
+let INVOICE_PRESELECT = null, INV_MONTH = 'all';
+function onInvMonth(sel){ INV_MONTH = sel.value; renderInvoice((document.getElementById('inv_order')||{}).value || ''); }
 function renderInvoice(preId){
   const sel = (typeof preId==='string' && preId) ? preId : (INVOICE_PRESELECT || '');
   INVOICE_PRESELECT = null;
-  const orders = CACHE.orders;
-  const options = orders.slice().reverse().map(o=>`<option value="${o.id}" ${o.id===sel?'selected':''}>${o.id} — ${esc(o.customerName)} (${o.date})</option>`).join('');
+  const selOrder = sel ? CACHE.orders.find(o => o.id===sel) : null;
+  if(selOrder && INV_MONTH!=='all') INV_MONTH = mOf(selOrder.date) || INV_MONTH;   // বাছাই করা অর্ডারের মাসেই দেখাবে
+  if(INV_MONTH!=='all' && !monthsList().includes(INV_MONTH)) INV_MONTH = 'all';
+  // মাস অনুযায়ী সাজানো: নতুন মাস আগে, প্রতি মাসে নতুন তারিখ আগে
+  const list = CACHE.orders.filter(o => INV_MONTH==='all' || mOf(o.date)===INV_MONTH)
+    .slice().sort((a,b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (a.id < b.id ? 1 : -1)));
+  const opt = o => `<option value="${o.id}" ${o.id===sel?'selected':''}>${o.id} — ${esc(o.customerName)} (${o.date})</option>`;
+  const groups = {};
+  list.forEach(o => { const m = mOf(o.date) || '—'; (groups[m] = groups[m] || []).push(o); });
+  const options = Object.keys(groups).sort().reverse().map(m =>
+    `<optgroup label="${m==='—' ? 'তারিখ নেই' : monthLabel(m) + ' (' + monthRangeText(m) + ') — ' + groups[m].length + 'টি'}">${groups[m].map(opt).join('')}</optgroup>`).join('');
   document.getElementById('pageContent').innerHTML = `
     <div class="panel">
       <h3>ইনভয়েস তৈরি করুন</h3>
+      <div class="form-field" style="max-width:420px;margin-bottom:12px;">
+        <label>মাস</label>
+        <select onchange="onInvMonth(this)">${monthOptionsHtml(INV_MONTH, true)}</select>
+      </div>
       <div class="form-field" style="max-width:420px;">
         <label>অর্ডার নির্বাচন করুন</label>
         <select id="inv_order" onchange="drawInvoice()">
@@ -4676,7 +4690,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৫.১';
+const APP_VERSION = '৫.২';
 const APP_UPDATED_FALLBACK = '2026-10-21T14:00:00+06:00';
 function fmtUpdated(d){
   try{
