@@ -351,3 +351,13 @@ input,select,textarea{max-width:100%;box-sizing:border-box;min-width:0;}
 .thermal .invoice-head img.qr{width:48px;height:48px;}
 .thermal .invoice-head .qr-spacer{width:40px;}
 @media print{ .invoice-head img.qr{display:block !important;} }
+
+/* ---- সাইডবারের নিচের অংশ ছোট ও গোছানো (৫.৫) ---- */
+.sidebar-footer{padding-top:8px;margin-top:6px;}
+.sidebar-footer .session-info{font-size:11.5px;line-height:1.35;margin-bottom:4px;text-align:left;}
+.sidebar-footer .ver-line{opacity:.8;font-size:10.5px;margin-bottom:8px;}
+.sf-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
+.sf-grid .hidden + .sf-btn{grid-column:auto;}
+.btn.sf-btn{font-size:12px;padding:5px 4px;min-height:34px !important;margin:0 !important;text-align:center;text-decoration:none;display:flex;align-items:center;justify-content:center;line-height:1.2;}
+.nav-item{min-height:38px;padding-top:7px;padding-bottom:7px;}
+.sidebar-brand{margin-bottom:12px;padding-bottom:12px;}

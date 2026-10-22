@@ -14,7 +14,7 @@
 <meta name="theme-color" content="#123C69">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=5.4">
+<link rel="stylesheet" href="style.css?v=5.5">
 </head>
 <body>
 
@@ -64,12 +64,14 @@
     <nav id="sideNav" class="side-nav"></nav>
     <div class="sidebar-footer">
       <div id="sessionInfo" class="session-info"></div>
-      <div id="appVersionSide" class="session-info" style="opacity:.85;"></div>
-      <a id="manualLink" class="btn btn-ghost btn-block hidden" href="manual.pdf" target="_blank" style="margin-bottom:8px;font-size:13px;text-decoration:none;display:block;text-align:center;">📖 ব্যবহার নির্দেশিকা</a>
-      <button class="btn btn-ghost btn-block" onclick="openChangePassword()" style="margin-bottom:8px;font-size:13px;">🔑 পাসওয়ার্ড বদলান</button>
-      <button class="btn btn-ghost btn-block" onclick="forceRefreshApp()" style="margin-bottom:8px;font-size:13px;">🔄 নতুন সংস্করণ লোড করুন</button>
-      <button id="installBtnSide" class="btn btn-ghost btn-block install-btn hidden" onclick="installApp()" style="margin-bottom:8px;">📲 অ্যাপ ইনস্টল করুন</button>
-      <button class="btn btn-ghost btn-block" onclick="handleLogout()">লগ-আউট</button>
+      <div id="appVersionSide" class="session-info ver-line"></div>
+      <div class="sf-grid">
+        <a id="manualLink" class="btn btn-ghost sf-btn hidden" href="manual.pdf" target="_blank">📖 নির্দেশিকা</a>
+        <button class="btn btn-ghost sf-btn" onclick="openChangePassword()">🔑 পাসওয়ার্ড</button>
+        <button class="btn btn-ghost sf-btn" onclick="forceRefreshApp()">🔄 আপডেট</button>
+        <button class="btn btn-ghost sf-btn" onclick="handleLogout()">⎋ লগ-আউট</button>
+      </div>
+      <button id="installBtnSide" class="btn btn-ghost sf-btn install-btn hidden" onclick="installApp()" style="width:100%;margin-top:6px;">📲 অ্যাপ ইনস্টল করুন</button>
     </div>
   </aside>
 
@@ -96,6 +98,7 @@
 <script src="firebase-config.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=5.4"></script>
+<script src="app.js?v=5.5"></script>
+<script src="secure.js?v=5.5"></script>
 </body>
 </html>

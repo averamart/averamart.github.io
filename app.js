@@ -139,6 +139,7 @@ function attachListeners(){
       qrPlaces: data.qrPlaces ?? CACHE.settings.qrPlaces,
       qrCaption: data.qrCaption ?? CACHE.settings.qrCaption
     };
+    Object.keys(merged).forEach(k => { if(merged[k] === undefined) delete merged[k]; });   // Firestore-এ undefined মান লেখা যায় না
     CACHE.settings = merged;
     if(!data.productCategories || !data.expenseCategories || !data.businessAddress) docRef('settings').set(merged);
   }, () => { docRef('settings').set(CACHE.settings); });
@@ -4867,7 +4868,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৫.৪';
+const APP_VERSION = '৫.৫';
 const APP_UPDATED_FALLBACK = '2026-10-21T14:00:00+06:00';
 function fmtUpdated(d){
   try{

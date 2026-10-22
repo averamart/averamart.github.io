@@ -2,8 +2,8 @@
 // Network-first for the app's own files (always revalidated, bypassing the browser's 10-minute HTTP cache),
 // so every GitHub update shows up straight away when online; the saved copy is used only when offline. Firebase/Firestore traffic
 // (other domains) is never touched, so business data is never served stale.
-const CACHE = 'avera-mart-v39';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'firebase-config.js', 'logo.jpg', 'qr.png', 'icon-192.png', 'icon-512.png', 'manifest.json', 'manual.pdf'];
+const CACHE = 'avera-mart-v40';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'secure.js', 'firebase-config.js', 'logo.jpg', 'qr.png', 'icon-192.png', 'icon-512.png', 'manifest.json', 'manual.pdf'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).catch(() => {}));
