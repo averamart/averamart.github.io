@@ -4868,7 +4868,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৫.৫';
+const APP_VERSION = '৫.৬';
 const APP_UPDATED_FALLBACK = '2026-10-21T14:00:00+06:00';
 function fmtUpdated(d){
   try{

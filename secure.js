@@ -301,17 +301,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <input type="password" id="loginPass" placeholder="আপনার পাসওয়ার্ড" autocomplete="current-password" onkeydown="if(event.key==='Enter')handleLogin()"></div>
     <button id="loginBtn" class="btn btn-primary btn-block" onclick="handleLogin()">প্রবেশ করুন</button>
     <p style="margin:10px 0 0;font-size:13px;"><a href="#" onclick="secForgot();return false;">পাসওয়ার্ড ভুলে গেছেন?</a></p>
-    <p style="margin:6px 0 0;font-size:12.5px;"><a href="#" onclick="secToggleSetup();return false;">প্রথমবার সেটআপ (শুধু মালিক)</a></p>
-    <div id="secSetupBox" class="hidden" style="margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);">
-      <p class="hint-text" style="margin:0 0 8px;"><b>প্রথম অ্যাডমিন তৈরি</b> — এটা শুধু একবারই চলে।</p>
-      <div class="field-group"><input type="text" id="su_code" placeholder="সেটআপ কোড (Rules-এ আপনার বসানো)" autocapitalize="none" autocomplete="off"></div>
-      <div class="field-group"><input type="text" id="su_name" placeholder="নাম (ঐচ্ছিক)" autocomplete="off"></div>
-      <div class="field-group"><input type="text" id="su_id" placeholder="অ্যাডমিনের ইমেইল" autocapitalize="none" autocomplete="off"></div>
-      <div class="field-group"><input type="password" id="su_p1" placeholder="পাসওয়ার্ড (কমপক্ষে ৬ অক্ষর)" autocomplete="new-password"></div>
-      <div class="field-group"><input type="password" id="su_p2" placeholder="পাসওয়ার্ড আবার" autocomplete="new-password"></div>
-      <button id="secSetupBtn" class="btn btn-outline btn-block" onclick="secSetup()">অ্যাডমিন তৈরি করুন</button>
-      <p id="secSetupMsg" class="error-text"></p>
-    </div>`;
+`;
   const st = E('loginStatus'); if(st) st.textContent = '';
 });
 })();
