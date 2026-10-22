@@ -134,7 +134,10 @@ function attachListeners(){
       businessAddress: data.businessAddress || CACHE.settings.businessAddress,
       tagline: data.tagline ?? CACHE.settings.tagline,
       phone: data.phone ?? CACHE.settings.phone,
-      website: data.website ?? CACHE.settings.website
+      website: data.website ?? CACHE.settings.website,
+      qrImg: data.qrImg ?? CACHE.settings.qrImg,
+      qrPlaces: data.qrPlaces ?? CACHE.settings.qrPlaces,
+      qrCaption: data.qrCaption ?? CACHE.settings.qrCaption
     };
     CACHE.settings = merged;
     if(!data.productCategories || !data.expenseCategories || !data.businessAddress) docRef('settings').set(merged);
@@ -195,7 +198,7 @@ function saveCollection(name, arr){
   docRef(name).set({items: arr}).catch(e => saveFailed(name, e));
   return true;
 }
-function saveSettings(obj){ CACHE.settings = obj; docRef('settings').set(obj).catch(e => saveFailed('settings', e)); }
+function saveSettings(obj){ CACHE.settings = obj; try{ qrPrep(); }catch(e){} docRef('settings').set(obj).catch(e => saveFailed('settings', e)); }
 function saveUsers(obj){ CACHE.users = obj; docRef('users').set(obj).catch(e => saveFailed('users', e)); }
 
 /* ---------------- Helpers ---------------- */
@@ -992,6 +995,60 @@ async function lfUploadImage(pid, input){
   }catch(e){ alert('ছবি সংরক্ষণ হয়নি: ' + (e.message||e)); }
 }
 /* ---- আঁকা ---- */
+/* ===== QR কোড (সেটিংস থেকে নিয়ন্ত্রিত) ===== */
+let QR_IMG = null, QR_SRC_LOADED = null;
+function qrSrc(){ return CACHE.settings.qrImg || 'qr.png'; }
+function qrOn(place){ return !!QR_IMG && ((CACHE.settings.qrPlaces || {})[place] !== false); }
+async function qrPrep(){ const src = qrSrc(); if(QR_SRC_LOADED === src && QR_IMG) return; QR_IMG = await lfLoadImage(src); QR_SRC_LOADED = QR_IMG ? src : null; }
+function qrDraw(c, x, y, size, pad){
+  pad = pad || 7; c.save(); c.shadowColor = 'rgba(0,0,0,.18)'; c.shadowBlur = 8; lfRR(c, x, y, size, size, 12); c.fillStyle = '#fff'; c.fill(); c.restore();
+  c.imageSmoothingEnabled = false; c.drawImage(QR_IMG, x+pad, y+pad, size-2*pad, size-2*pad); c.imageSmoothingEnabled = true;
+}
+function qrHeadHtml(){
+  const on = (CACHE.settings.qrPlaces || {}).invoice !== false, cap = (CACHE.settings.qrCaption ?? 'স্ক্যান করুন');
+  if(!on) return '<div class="qr-spacer"></div>';
+  return `<div class="qr-box"><img class="qr" src="${esc(qrSrc())}" alt="QR">${cap ? `<span>${esc(cap)}</span>` : ''}</div>`;
+}
+function qrCompress(file){
+  return new Promise(res => { const fr = new FileReader(); fr.onload = () => { const im = new Image(); im.onload = () => {
+    const m = Math.min(1, 420/Math.max(im.width, im.height)), cv = document.createElement('canvas'); cv.width = Math.round(im.width*m); cv.height = Math.round(im.height*m);
+    const x = cv.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0,0,cv.width,cv.height); x.drawImage(im, 0, 0, cv.width, cv.height); res(cv.toDataURL('image/png')); };
+    im.onerror = () => res(null); im.src = fr.result; }; fr.onerror = () => res(null); fr.readAsDataURL(file); });
+}
+async function qrUpload(input){
+  const f = input.files[0]; if(!f) return; const d = await qrCompress(f); if(!d){ alert('ছবিটি পড়া যায়নি'); return; }
+  saveSettings({...CACHE.settings, qrImg:d}); await qrPrep(); renderSettings();
+}
+function qrReset(){ const st = {...CACHE.settings}; delete st.qrImg; saveSettings(st); renderSettings(); }
+function qrTogglePlace(p, on){ const st = {...CACHE.settings}; st.qrPlaces = {...(st.qrPlaces||{}), [p]:!!on}; saveSettings(st); }
+function qrSaveCaption(){ saveSettings({...CACHE.settings, qrCaption:document.getElementById('s_qrcap').value.trim()}); alert('সংরক্ষিত হয়েছে'); }
+function qrPanelHtml(){
+  const pl = CACHE.settings.qrPlaces || {}, chk = p => pl[p] === false ? '' : 'checked';
+  const row = (p, t) => `<label style="display:flex;gap:8px;align-items:center;font-size:13.5px;margin:6px 0;"><input type="checkbox" ${chk(p)} onchange="qrTogglePlace('${p}',this.checked)"> ${t}</label>`;
+  return `<div class="panel"><h3>QR কোড</h3>
+    <p style="font-size:12.5px;color:var(--text-muted);">ওয়েবসাইট/অর্ডার লিংকের QR ছবি দিন, তারপর কোথায় কোথায় দেখাবে বেছে নিন।</p>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;"><img src="${esc(qrSrc())}" alt="QR" style="width:96px;height:96px;border:1px solid var(--border);border-radius:8px;background:#fff;object-fit:contain;image-rendering:pixelated;">
+      <div><input type="file" accept="image/*" onchange="qrUpload(this)"><div style="margin-top:6px;"><button class="btn btn-outline btn-sm" onclick="qrReset()">ডিফল্ট QR-এ ফিরুন</button></div></div></div>
+    <h4 style="margin:12px 0 4px;">যেখানে দেখাবে</h4>
+    ${row('leaflet','অফার লিফলেটের ফুটার (মাঝখানে)')}${row('catalog','পণ্য ক্যাটালগের ফুটার (মাঝখানে)')}${row('cover','ক্যাটালগের কভার পাতা')}${row('invoice','ইনভয়েসের হেডার (ডানে) — প্রিন্ট, PDF ও ছবিতে')}
+    <div class="form-field"><label>ইনভয়েসে QR-এর নিচের লেখা</label><input id="s_qrcap" value="${esc(CACHE.settings.qrCaption ?? 'স্ক্যান করুন')}"></div>
+    <button class="btn btn-primary btn-sm" onclick="qrSaveCaption()">লেখা সংরক্ষণ</button></div>`;
+}
+/* টেবিলের হেডার ও সংখ্যার কলাম একই দিকে (ডানে) মেলানো */
+function alignTables(root){
+  (root||document).querySelectorAll('table').forEach(t => {
+    const hr = t.tHead && t.tHead.rows[0]; if(!hr) return; const ths = Array.from(hr.cells); if(ths.some(h => h.colSpan > 1)) return;
+    const rows = Array.from(t.tBodies).flatMap(b => Array.from(b.rows)).filter(r => r.cells.length === ths.length && !Array.from(r.cells).some(c => c.colSpan > 1));
+    ths.forEach((th,i) => {
+      let n = 0, ok = rows.length > 0;
+      for(const r of rows){ const td = r.cells[i], isN = /(^|\s)(cell-num|sp-num)(\s|$)/.test(td.className); if(isN) n++; else if(td.textContent.trim() !== '' && td.textContent.trim() !== '—') { ok = false; break; } }
+      th.classList.toggle('th-num', ok && n > 0);
+    });
+  });
+}
+(function(){ let q = 0; const run = () => { q = 0; alignTables(document.body); };
+  document.addEventListener('DOMContentLoaded', () => { new MutationObserver(() => { if(!q) q = requestAnimationFrame(run); }).observe(document.body, {childList:true, subtree:true}); });
+})();
 function lfRR(c,x,y,w,h,r){ c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath(); }
 function lfF(wt, size){ return `${wt} ${size}px ${LF_FONT}`; }
 function lfWrap(c, text, maxW, maxLines){
@@ -1087,6 +1144,7 @@ function lfV(k){
   return (LF[k]!==undefined && LF[k]!==null) ? String(LF[k]) : String(d[k]||'');
 }
 async function lfDrawPage(canvas, cells, pageNo, pageCount, imgs){
+  await qrPrep();
   const c = canvas.getContext('2d'); canvas.width = LF_W; canvas.height = LF_H;
   const W = LF_W, H = LF_H, g0 = lfGrid();
   c.fillStyle = '#EAF2FA'; c.fillRect(0,0,W,H);
@@ -1113,11 +1171,13 @@ async function lfDrawPage(canvas, cells, pageNo, pageCount, imgs){
   g = c.createLinearGradient(0,H-130,W,H); g.addColorStop(0,'#17539F'); g.addColorStop(.6,'#1B8A8F'); g.addColorStop(1,'#2DB57A');
   c.fillStyle = g; c.fillRect(0,H-130,W,130);
   c.textAlign = 'left'; c.fillStyle = '#fff';
-  const note = lfV('footerNote').trim(); if(note){ lfFit(c, note, 470, 40, 26, 800); c.fillText(note, 40, H-70); }
+  const qrL = qrOn('leaflet'), sw = qrL ? 400 : 470;
+  if(qrL) qrDraw(c, W/2-57, H-122, 114);
+  const note = lfV('footerNote').trim(); if(note){ lfFit(c, note, sw, 40, 26, 800); c.fillText(note, 40, H-70); }
   const sub = lfV('footerSub').trim(); if(sub){ c.font = lfF(600, 24); c.fillText(sub, 40, H-30); }
   c.textAlign = 'right';
-  const ph = lfV('phone').trim(); if(ph){ lfFit(c, ph, 460, 36, 24, 800); c.fillText(ph, W-40, H-76); }
-  c.font = lfF(500, 21); lfWrap(c, lfV('address'), 470, 2).forEach((ln,i) => c.fillText(ln, W-40, H-44+i*24));
+  const ph = lfV('phone').trim(); if(ph){ lfFit(c, ph, qrL?400:460, 36, 24, 800); c.fillText(ph, W-40, H-76); }
+  c.font = lfF(500, 21); lfWrap(c, lfV('address'), sw, 2).forEach((ln,i) => c.fillText(ln, W-40, H-44+i*24));
   c.textAlign = 'left';
 }
 async function lfCanvases(){
@@ -1612,11 +1672,13 @@ function catChrome(c, pill, no, total){
   g = c.createLinearGradient(0,H-130,W,H); g.addColorStop(0,'#17539F'); g.addColorStop(.6,'#1B8A8F'); g.addColorStop(1,'#2DB57A');
   c.fillStyle = g; c.fillRect(0,H-130,W,130);
   c.textAlign = 'left'; c.fillStyle = '#fff';
-  const note = catVal('footerNote').trim(); if(note){ lfFit(c, note, 470, 40, 26, 800); c.fillText(note, 40, H-70); }
+  const qrC = qrOn('catalog'), sw = qrC ? 400 : 470;
+  if(qrC) qrDraw(c, W/2-57, H-122, 114);
+  const note = catVal('footerNote').trim(); if(note){ lfFit(c, note, sw, 40, 26, 800); c.fillText(note, 40, H-70); }
   const sub = catVal('footerSub').trim(); if(sub){ c.font = lfF(600, 24); c.fillText(sub, 40, H-30); }
   c.textAlign = 'right';
-  const ph = catVal('phone').trim(); if(ph){ lfFit(c, ph, 460, 36, 24, 800); c.fillText(ph, W-40, H-76); }
-  c.font = lfF(500, 21); lfWrap(c, catVal('address'), 470, 2).forEach((ln,i) => c.fillText(ln, W-40, H-44+i*24));
+  const ph = catVal('phone').trim(); if(ph){ lfFit(c, ph, qrC?400:460, 36, 24, 800); c.fillText(ph, W-40, H-76); }
+  c.font = lfF(500, 21); lfWrap(c, catVal('address'), sw, 2).forEach((ln,i) => c.fillText(ln, W-40, H-44+i*24));
   c.textAlign = 'left';
 }
 function catCard(c, p, x, y, w, h, s, img){
@@ -1634,6 +1696,7 @@ function catCard(c, p, x, y, w, h, s, img){
   if(CAT.showPrice){ c.font = lfF(800, Math.max(22, Math.round(42*s))); c.fillStyle = '#17539F'; c.fillText(bnTaka(packListPrice(p, CAT.priceList)), x+12*s, y+h-Math.round(14*s)); }
 }
 async function catDrawPage(canvas, pg, plan){
+  await qrPrep();
   const c = canvas.getContext('2d'); canvas.width = LF_W; canvas.height = LF_H;
   const W = LF_W, H = LF_H, total = plan.pages.length;
   if(!LF_LOGO) LF_LOGO = await lfLoadImage('logo.jpg');
@@ -1650,10 +1713,12 @@ async function catDrawPage(canvas, pg, plan){
     c.fillStyle = 'rgba(255,255,255,.92)'; c.font = lfF(600, 30); c.fillText(`${bnN(plan.total)}টি পণ্য · ${bnN(plan.groups.length)}টি ক্যাটাগরি`, W/2, 1050);
     lfRR(c, 90, 1180, W-180, 250, 28); c.fillStyle = 'rgba(255,255,255,.16)'; c.fill();
     c.fillStyle = '#fff'; let yy = 1245;
-    const note = catVal('footerNote').trim(); if(note){ lfFit(c, note, W-260, 40, 26, 800); c.fillText(note, W/2, yy); yy += 52; }
-    const ph = catVal('phone').trim(); if(ph){ lfFit(c, ph, W-260, 38, 26, 800); c.fillText(ph, W/2, yy); yy += 46; }
-    c.font = lfF(500, 24); lfWrap(c, catVal('address'), W-260, 2).forEach(ln => { c.fillText(ln, W/2, yy); yy += 32; });
-    const sub = catVal('footerSub').trim(); if(sub){ c.font = lfF(700, 26); c.fillText(sub, W/2, yy+4); }
+    const qrV = qrOn('cover'), cx = qrV ? 420 : W/2, tw = qrV ? 620 : W-260;
+    if(qrV) qrDraw(c, 770, 1210, 190, 10);
+    const note = catVal('footerNote').trim(); if(note){ lfFit(c, note, tw, 40, 26, 800); c.fillText(note, cx, yy); yy += 52; }
+    const ph = catVal('phone').trim(); if(ph){ lfFit(c, ph, tw, 38, 26, 800); c.fillText(ph, cx, yy); yy += 46; }
+    c.font = lfF(500, 24); lfWrap(c, catVal('address'), tw, 2).forEach(ln => { c.fillText(ln, cx, yy); yy += 32; });
+    const sub = catVal('footerSub').trim(); if(sub){ c.font = lfF(700, 26); c.fillText(sub, cx, yy+4); }
     c.textAlign = 'left'; return;
   }
   catChrome(c, pg.type==='toc' ? 'সূচিপত্র' : 'পণ্য তালিকা', pg.no, total);
@@ -2364,7 +2429,7 @@ function productRowsHtml(){
   return list.map(p => `
     <tr class="${hlClass('products',p.id)}" style="${p.hidden?'opacity:.7;':''}">
       <td>${p.id}</td>
-      <td>${esc(p.name)}${p.hidden ? ' <span class="badge badge-hidden">লুকানো</span><br><span class="muted-cell" style="font-size:11.5px;">অর্ডার সার্চ/ইনভেন্টরিতে আসবে না — ক্রয় এন্ট্রি দিলে চালু হবে</span>' : ''}${p.priceTiers ? `<br><span class="muted-cell">${esc(p.priceTiers)}</span>` : ''}</td>
+      <td>${esc(p.name)}${p.hidden ? ' <span class="badge badge-hidden">লুকানো</span><br><span class="muted-cell" style="font-size:11.5px;">অর্ডার সার্চ/ইনভেন্টরিতে আসবে না — ক্রয় এন্ট্রি দিলে চালু হবে</span>' : ''}${p.priceTiers ? `<br><span class="muted-cell">${esc(p.priceTiers)}</span>` : ''}${qtyDiscText(p) ? `<br><span class="muted-cell" style="font-size:11.5px;">${esc(qtyDiscText(p))}</span>` : ''}</td>
       <td>${esc(p.category)}</td>
       <td>${esc(p.unit||'কেজি')}</td>
       ${admin ? `<td class="cell-num">${money(packPrice(p,'cost'))}${fmtBasis(p)?`<br><span class="muted-cell" style="font-size:11.5px;">/ ${fmtBasis(p)}</span>`:''}</td>` : ''}
@@ -2564,6 +2629,15 @@ function openProductForm(id){
         <div class="form-field"><label>বিক্রয়মূল্য (৳) — <span class="basis-lbl"></span></label><input id="f_retail" type="number" step="any" value="${p?packPrice(p,'retail'):''}" oninput="updatePriceHint()"></div>
         <div class="form-field"><label>কর্পোরেট মূল্য (৳) — ঐচ্ছিক, <span class="basis-lbl"></span></label><input id="f_corporate" type="number" step="any" value="${p && Number(p.corporate)>0 ? packListPrice(p,'corporate') : ''}" placeholder="ফাঁকা = খুচরা দাম"></div>
         <div class="form-field" style="grid-column:1/-1;"><div id="f_pricehint" class="flash" style="margin:0;"></div></div>
+        <div class="form-field" style="grid-column:1/-1;">
+          <label>🏷️ পরিমাণ অনুযায়ী ছাড় (ঐচ্ছিক — সর্বোচ্চ ৩টি স্তর)</label>
+          ${[0,1,2].map(i => { const t = qtyDiscTiers(p)[i] || {}; return `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+            <span class="muted-cell">কমপক্ষে</span><input id="f_qd_min${i}" type="number" min="0" step="any" value="${t.min||''}" placeholder="পরিমাণ" style="width:90px;">
+            <span class="muted-cell">(পণ্যের এককে) নিলে</span>
+            <select id="f_qd_type${i}" style="padding:8px;border:1px solid var(--border);border-radius:7px;background:var(--bg);"><option value="amt" ${t.type==='amt'||!t.type?'selected':''}>মোট ৳ ছাড়</option><option value="unit" ${t.type==='unit'?'selected':''}>প্রতি একক ৳ ছাড়</option><option value="pct" ${t.type==='pct'?'selected':''}>% ছাড়</option></select>
+            <input id="f_qd_val${i}" type="number" min="0" step="any" value="${t.val||''}" placeholder="ছাড়" style="width:90px;"></div>`; }).join('')}
+          <span class="muted-cell" style="font-size:11.5px;">যেমন: চাল — ২৫ কেজি, মোট ৳ ছাড়, ৫০। অর্ডারে ওই পরিমাণ দিলে ছাড় নিজে থেকে বসবে (ইনভয়েসে "ছাড়" হিসেবে দেখাবে)। ফাঁকা রাখলে কোনো স্তর থাকবে না।</span>
+        </div>
         <div class="form-field"><label>বর্তমান স্টক (এককে)</label><input id="f_stock" type="number" value="${p?p.stock:0}"></div>
         <div class="form-field"><label>ন্যূনতম স্টক সতর্কতা</label><input id="f_min" type="number" value="${p?p.minStock:5}"></div>
         <div class="form-field"><label>বিক্রির জন্য চালু?</label>
@@ -2590,7 +2664,18 @@ function saveProduct(id){
   const basis = Number(document.getElementById('f_basis').value);
   if(!(basis>0)){ alert('দাম কত পরিমাণের জন্য তা সঠিকভাবে দিন (যেমন ১ বা ৫)'); return; }
   const per = v => Math.round(v/basis*10000)/10000;
+  const qd = []; const seen = new Set();
+  for(let i=0;i<3;i++){
+    const mn = Number(document.getElementById('f_qd_min'+i).value||0), vl = Number(document.getElementById('f_qd_val'+i).value||0), ty = document.getElementById('f_qd_type'+i).value;
+    if(!mn && !vl) continue;
+    if(!(mn>0) || !(vl>0)){ alert(`ছাড়ের স্তর ${i+1}: পরিমাণ ও ছাড় দুটোই দিন (অথবা দুটোই ফাঁকা রাখুন)।`); return; }
+    if(ty==='pct' && vl>100){ alert(`ছাড়ের স্তর ${i+1}: শতাংশ ১০০-র বেশি হতে পারে না।`); return; }
+    if(seen.has(mn)){ alert('দুটি স্তরে একই পরিমাণ দেওয়া যাবে না।'); return; }
+    seen.add(mn); qd.push({min:mn, type:ty, val:vl});
+  }
+  qd.sort((a,b) => a.min-b.min);
   const data = {
+    qtyDisc: qd,
     name,
     category: document.getElementById('f_cat').value,
     cost: (() => { const old0 = id ? products.find(p=>p.id===id) : null; if(!isAdmin) return old0 ? (old0.cost||0) : 0; const v = Number(document.getElementById('f_cost').value||0); if(old0 && (Number(old0.priceBasis)||1)===basis && Math.abs(v - packPrice(old0,'cost')) < 0.0051) return old0.cost; return per(v); })(),
@@ -2719,6 +2804,41 @@ function updateOrderStatus(id, newStatus){
 
 /* ---- Order form: multi-product cart with a searchable product picker ---- */
 let ORDER_PL = 'retail';
+/* ============================================================
+   পরিমাণ অনুযায়ী ছাড় (স্তর) — পণ্যে সর্বোচ্চ ৩টি: "কমপক্ষে X এককে → ছাড়"
+   ধরন: amt = মোট বিলে ৳ ছাড় · unit = প্রতি একক ৳ ছাড় · pct = % ছাড়। পরিমাণ পণ্যের নিজের এককে (যেমন কেজি)।
+   অর্ডারে সবচেয়ে বড় যে স্তরে পৌঁছেছে শুধু সেটাই নিজে থেকে "এই পণ্যে ছাড়" ঘরে বসে; হাতে বদলালে আর বদলায় না।
+   ============================================================ */
+function qtyDiscTiers(p){
+  if(!p || !Array.isArray(p.qtyDisc)) return [];
+  return p.qtyDisc.map(t => ({min:Number(t.min), type:['amt','unit','pct'].includes(t.type) ? t.type : 'amt', val:Number(t.val)}))
+    .filter(t => t.min>0 && t.val>0).sort((a,b) => a.min-b.min).slice(0,3);
+}
+function qtyDiscPick(p, qty){ let best = null; qtyDiscTiers(p).forEach(t => { if(Number(qty)+1e-9 >= t.min) best = t; }); return best; }
+function qtyDiscLabel(t, p){
+  const unit = (p && p.unit) || 'কেজি';
+  return `${r3(t.min)} ${unit}+ → ${t.type==='pct' ? t.val+'%' : '৳'+r3(t.val)} ছাড়${t.type==='unit' ? ' (প্রতি '+unit+')' : ''}`;
+}
+function qtyDiscText(p){ const ts = qtyDiscTiers(p); return ts.length ? '🏷️ ' + ts.map(t => qtyDiscLabel(t, p)).join(' · ') : ''; }
+function applyAutoDisc(it){
+  if(it.discManual) return;
+  const p = CACHE.products.find(x => x.id===it.productId), t = qtyDiscPick(p, it.qty);
+  if(!t){ if(it.discAuto){ it.discType = 'amt'; it.discVal = 0; it.discAuto = false; } return; }
+  if(t.type==='pct'){ it.discType = 'pct'; it.discVal = t.val; }
+  else { it.discType = 'amt'; it.discVal = t.type==='unit' ? Math.round(t.val*Number(it.qty)*100)/100 : t.val; }
+  it.discAuto = true;
+}
+function resetAutoDisc(productId){
+  const it = ORDER_CART.find(x => x.productId===productId); if(!it) return;
+  it.discManual = false; applyAutoDisc(it); renderCart();
+}
+function qtyDiscHint(it, p){
+  const ts = qtyDiscTiers(p); if(!ts.length) return '';
+  const cur = qtyDiscPick(p, it.qty);
+  if(it.discManual) return cur ? `<br><button class="btn btn-outline btn-sm" style="margin-top:4px;font-size:11px;padding:2px 8px;" onclick="resetAutoDisc('${it.productId}')">↺ স্তরের ছাড় বসান (${esc(qtyDiscLabel(cur, p))})</button>` : '';
+  if(cur) return `<br><span style="font-size:11px;color:#0E7448;">স্তরের ছাড়: ${esc(qtyDiscLabel(cur, p))}</span>`;
+  const nx = ts[0]; return `<br><span style="font-size:11px;color:var(--text-muted);">${r3(nx.min - Number(it.qty))} ${esc(p.unit||'কেজি')} আরও নিলে ${nx.type==='pct' ? nx.val+'%' : '৳'+r3(nx.val)} ছাড়</span>`;
+}
 let ORDER_CART = [];   // [{productId, qty, unitPrice, standardPrice}]
 
 let ORDER_FROM = 'orders', ORDER_EDIT_ID = '';
@@ -2737,7 +2857,7 @@ function openOrderForm(id, from){
   ORDER_CART = o ? orderItems(o).map(it=>{
     const p = CACHE.products.find(x=>x.id===it.productId);
     const m = unitOptions(p).find(o=>o.label===it.du);
-    return {...it, mode: m ? m.key : 'base', pl: PRICE_LISTS[it.pl] ? it.pl : ORDER_PL};
+    return {...it, mode: m ? m.key : 'base', pl: PRICE_LISTS[it.pl] ? it.pl : ORDER_PL, discManual:true};   // সংরক্ষিত ছাড় যেমন আছে তেমনই থাকবে
   }) : [];
 
   const html = `
@@ -2809,6 +2929,7 @@ function renderProductSearch(query){
         <span class="muted-cell">স্টক: ${fmtStock(p.stock, p)} · ${money(unitListPrice(p, ORDER_PL))}/${esc(p.unit||'কেজি')}</span>
       </div>
       ${p.priceTiers ? `<span class="muted-cell" style="font-size:11.5px;">${esc(p.priceTiers)}</span>` : ''}
+      ${qtyDiscText(p) ? `<span class="muted-cell" style="font-size:11.5px;">${esc(qtyDiscText(p))}</span>` : ''}
     </div>`).join('');
   box.classList.add('open');
 }
@@ -2817,8 +2938,8 @@ function addToCart(productId){
   const p = CACHE.products.find(x=>x.id===productId);
   if(!p) return;
   const existing = ORDER_CART.find(it=>it.productId===productId);
-  if(existing){ existing.qty = Number(existing.qty) + 1; }
-  else { const lp = unitListPrice(p, ORDER_PL); ORDER_CART.push({productId, qty:1, unitPrice: lp, standardPrice: lp, pl: ORDER_PL, discType:'amt', discVal:0, surType:'amt', surVal:0}); }
+  if(existing){ existing.qty = Number(existing.qty) + 1; applyAutoDisc(existing); }
+  else { const lp = unitListPrice(p, ORDER_PL); ORDER_CART.push({productId, qty:1, unitPrice: lp, standardPrice: lp, pl: ORDER_PL, discType:'amt', discVal:0, surType:'amt', surVal:0}); applyAutoDisc(ORDER_CART[ORDER_CART.length-1]); }
   document.getElementById('o_search').value = '';
   document.getElementById('searchResults').innerHTML = '';
   document.getElementById('searchResults').classList.remove('open');
@@ -2830,6 +2951,7 @@ function updateCartQty(productId, qty){
     const v = Number(qty)||0;
     const o = optByKey(CACHE.products.find(x=>x.id===productId), it.mode);
     it.qty = Math.max(0.001, v/o.factor) || 1;
+    applyAutoDisc(it);
   }
   renderCart();
 }
@@ -2862,6 +2984,7 @@ function onPayMethodChange(){
 }
 function updateCartDisc(productId, key, val){
   const it = ORDER_CART.find(x=>x.productId===productId); if(!it) return;
+  it.discManual = true; it.discAuto = false;   // হাতে বদলালে আর নিজে থেকে বদলাবে না
   if(key==='type'){ it.discType = val==='pct' ? 'pct' : 'amt'; }
   else { it.discType = it.discType || 'amt'; it.discVal = Math.max(0, Number(val)||0); }
   renderCart();
@@ -2916,7 +3039,7 @@ function renderCart(){
           ${unitSelectHtml(p, it.mode||'base', `onchange="setCartUnitMode('${it.productId}', this.value)"`)}</td>
         <td class="cell-center"><select onchange="updateCartPL('${it.productId}', this.value)" style="padding:4px;border:1px solid var(--border);border-radius:6px;background:#fff;font-size:12px;margin-bottom:4px;">${Object.keys(PRICE_LISTS).map(k => `<option value="${k}" ${(it.pl||ORDER_PL)===k?'selected':''}>${PRICE_LISTS[k]}</option>`).join('')}</select><br><input type="number" min="0" value="${it.unitPrice}" style="width:80px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartPrice('${it.productId}', this.value)">${(it.standardPrice!=null && Number(it.unitPrice)<Number(it.standardPrice)) ? '<br><span style="font-size:11px;color:#B3261E;">দাম কমানো — ইনভয়েসে ছাড় দেখাবে না। "ছাড়" ঘর ব্যবহার করুন।</span>' : ''}</td>
         <td class="cell-center"><input type="number" min="0" step="any" value="${it.discVal||''}" placeholder="০" style="width:70px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartDisc('${it.productId}','val',this.value)">
-          <select onchange="updateCartDisc('${it.productId}','type',this.value)" style="padding:5px;border:1px solid var(--border);border-radius:6px;background:#fff;"><option value="amt" ${it.discType!=='pct'?'selected':''}>৳</option><option value="pct" ${it.discType==='pct'?'selected':''}>%</option></select></td>
+          <select onchange="updateCartDisc('${it.productId}','type',this.value)" style="padding:5px;border:1px solid var(--border);border-radius:6px;background:#fff;"><option value="amt" ${it.discType!=='pct'?'selected':''}>৳</option><option value="pct" ${it.discType==='pct'?'selected':''}>%</option></select>${qtyDiscHint(it, p)}</td>
         <td class="cell-center"><input type="number" min="0" step="any" value="${it.surVal||''}" placeholder="০" style="width:70px;text-align:center;padding:5px;border:1px solid var(--border);border-radius:6px;" onchange="updateCartSur('${it.productId}','val',this.value)">
           <select onchange="updateCartSur('${it.productId}','type',this.value)" style="padding:5px;border:1px solid var(--border);border-radius:6px;background:#fff;"><option value="amt" ${it.surType!=='pct'?'selected':''}>৳</option><option value="pct" ${it.surType==='pct'?'selected':''}>%</option></select></td>
         <td class="cell-num">${money(lineTotal)}${lineDisc(it)>0 ? `<br><span style="font-size:11.5px;color:#0E7448;">মূল ${money(lineGross(it))} − ছাড় ${money(lineDisc(it))}</span>` : ''}${lineSur(it)>0 ? `<br><span style="font-size:11.5px;color:#9A5B00;">+ বাড়তি ${money(lineSur(it))}</span>` : ''}<br><span class="muted-cell">${r3(it.qty*optByKey(p,it.mode).factor)} ${esc(optByKey(p,it.mode).label)} = ${r3(it.qty)}টি ${esc(p?.unit||'কেজি')} × ${money(it.unitPrice)}</span></td>
@@ -4197,12 +4320,13 @@ function drawInvoice(){
   const invHtml = `
     <div class="invoice-box" id="invoiceBox">
       <div class="invoice-head">
-        <div>
+        <img src="logo.jpg" alt="logo">
+        <div class="inv-mid">
           <h3>Avera Mart</h3>
           <p class="tagline">${esc(CACHE.settings.tagline||'')}</p>
           <p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">${esc(CACHE.settings.businessAddress)}${CACHE.settings.phone?' · '+esc(CACHE.settings.phone):''}</p>
         </div>
-        <img src="logo.jpg" alt="logo">
+        ${qrHeadHtml()}
       </div>
       <div class="invoice-meta">
         <div>ইনভয়েস: ${o.id}<br>তারিখ: ${o.date}</div>
@@ -4524,6 +4648,7 @@ function renderSettings(){
         </div>
         <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="saveBusinessAddress()">সংরক্ষণ করুন</button>
       </div>
+      ${qrPanelHtml()}
       ${fullReportPanelHtml()}
       <div class="panel">
         <h3>সার্ভার ব্যাকআপ (স্বয়ংক্রিয়)</h3>
@@ -4742,7 +4867,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৫.২';
+const APP_VERSION = '৫.৪';
 const APP_UPDATED_FALLBACK = '2026-10-21T14:00:00+06:00';
 function fmtUpdated(d){
   try{
