@@ -566,6 +566,7 @@ const NAV_ITEMS = [
   {key:'purchases', label:'ক্রয় খাতা', icon:'🛒', roles:['admin','manager']},
   {key:'expenses', label:'খরচ খাতা', icon:'💸', roles:['admin','manager']},
   {key:'dues', label:'বকেয়া হিসাব', icon:'📒', roles:['admin','manager']},
+  {key:'shareholders', label:'শেয়ারহোল্ডার ও কেনাকাটা', icon:'🤝', roles:['admin']},
   {key:'returns', label:'রিটার্ন ও সমন্বয়', icon:'🔄', roles:['admin','manager']},
   {key:'discounts', label:'ছাড় ও বাড়তি রেজিস্টার', icon:'🏷️', roles:['admin','manager']},
   {key:'inventory', label:'ইনভেন্টরি রিপোর্ট', icon:'📋', roles:['admin','manager']},
@@ -2869,6 +2870,7 @@ function openOrderForm(id, from){
         ${dateField('o_date', o?o.date:'')}
         <div class="form-field"><label>কাস্টমার নাম</label><input id="o_name" value="${o?esc(o.customerName):''}"></div>
         <div class="form-field"><label>মোবাইল নম্বর</label><input id="o_phone" value="${o?esc(o.phone):''}"></div>
+        <div class="form-field"><label>শেয়ারহোল্ডার ক্রেতা (ঐচ্ছিক — শুধু ট্র্যাকিংয়ের জন্য)</label><select id="o_sh" onchange="onOrderShareholder(this.value)" style="padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);"><option value="">— সাধারণ ক্রেতা —</option>${CACHE.shareholders.map(sh=>`<option value="${esc(sh.id)}" ${o&&o.shareholderId===sh.id?'selected':''}>${esc(sh.name)}</option>`).join('')}</select></div>
         <div class="form-field span-2"><label>ডেলিভারি ঠিকানা</label><input id="o_addr" value="${o?esc(o.address):''}"></div>
         <div class="form-field"><label>সব পণ্যের মূল্য তালিকা (প্রতিটি পণ্যের আলাদাও বাছা যায়)</label><select id="o_pl" onchange="onPriceListChange(this.value)" style="padding:9px;border:1px solid var(--border);border-radius:7px;background:var(--bg);">${Object.keys(PRICE_LISTS).map(k => `<option value="${k}" ${ORDER_PL===k?'selected':''}>${PRICE_LISTS[k]}</option>`).join('')}</select></div>
         <div class="form-field"><label>ডেলিভারি চার্জ (৳)</label><input id="o_delivery" type="number" value="${o?o.deliveryCharge:0}" oninput="renderCart()"></div>
@@ -3004,9 +3006,14 @@ function updateCartPL(productId, v){
 }
 function orderLists(o){ const set = new Set(orderItems(o).map(it => (it.pl && PRICE_LISTS[it.pl]) ? it.pl : ((o.priceList && PRICE_LISTS[o.priceList]) ? o.priceList : 'retail'))); return [...set]; }
 function orderListBadge(o){
-  const ls = orderLists(o); if(ls.length===1 && ls[0]==='retail') return '';
+  const shb = o.shareholderId ? ' <span class="badge" style="background:#E3F4EA;color:#1B6B3A;">🤝 শেয়ারহোল্ডার</span>' : '';
+  const ls = orderLists(o); if(ls.length===1 && ls[0]==='retail') return shb;
   const t = ls.length>1 ? 'মিশ্র তালিকা' : PRICE_LISTS[ls[0]];
-  return ' <span class="badge" style="background:#E9E4FA;color:#4B2FA8;">' + t + '</span>';
+  return shb + ' <span class="badge" style="background:#E9E4FA;color:#4B2FA8;">' + t + '</span>';
+}
+function onOrderShareholder(id){
+  const sh = CACHE.shareholders.find(x => x.id === id), nm = document.getElementById('o_name');
+  if(sh && nm && !nm.value.trim()) nm.value = sh.name;
 }
 function updateCartSur(productId, key, val){
   const it = ORDER_CART.find(x=>x.productId===productId); if(!it) return;
@@ -3071,6 +3078,7 @@ function saveOrder(id){
     date: pickedDate('o_date'),
     customerName: document.getElementById('o_name').value.trim(),
     phone: document.getElementById('o_phone').value.trim(),
+    shareholderId: (document.getElementById('o_sh')||{}).value || '',
     address: document.getElementById('o_addr').value.trim(),
     items: ORDER_CART.map(it=>{
       const p = CACHE.products.find(x=>x.id===it.productId);
@@ -4038,9 +4046,43 @@ function onShareholderSearch(){
   document.getElementById('shContribBody').innerHTML = t.contribRows;
   document.getElementById('shContribTitle').textContent = SH_Q.trim() ? 'জমার হিস্ট্রি (সার্চ ফলাফল)' : 'সাম্প্রতিক জমার হিস্ট্রি';
 }
+let SH_BUY_MONTH = 'all';
+function onShBuyMonth(sel){ SH_BUY_MONTH = sel.value; renderShareholders(); }
+function shareholderBuyHtml(){
+  const shs = CACHE.shareholders, inM = o => SH_BUY_MONTH==='all' || mOf(o.date)===SH_BUY_MONTH;
+  const valid = CACHE.orders.filter(o => o.status!=='Cancelled' && inM(o));
+  const mine = valid.filter(o => o.shareholderId && shs.some(s => s.id===o.shareholderId));
+  const stat = shs.map(sh => {
+    const os = mine.filter(o => o.shareholderId===sh.id);
+    return {sh, n:os.length, total:os.reduce((t,o)=>t+Number(o.total||0),0), due:os.reduce((t,o)=>t+orderDue(o),0), last:os.reduce((d,o)=>o.date>d?o.date:d,'')};
+  }).sort((a,b) => b.total-a.total || a.sh.name.localeCompare(b.sh.name,'bn'));
+  const buyers = stat.filter(x => x.n>0).length, grand = mine.reduce((t,o)=>t+Number(o.total||0),0);
+  const unlinked = CACHE.orders.filter(o => !o.shareholderId && shs.some(s => String(s.name).trim().toLowerCase()===String(o.customerName||'').trim().toLowerCase())).length;
+  const rows = stat.map(x => `<tr${x.n?'':' style="opacity:.65;"'}><td>${esc(x.sh.name)}</td><td class="cell-num">${x.n}</td><td class="cell-num">${money(x.total)}</td><td class="cell-num">${x.due>0?money(x.due):'—'}</td><td class="cell-num">${x.last||'কেনেননি'}</td></tr>`).join('');
+  const list = mine.slice().reverse().slice(0,40).map(o => { const sh = shs.find(s=>s.id===o.shareholderId);
+    return `<tr><td>${o.id}</td><td>${o.date}</td><td>${esc(sh?sh.name:'—')}</td><td class="cell-num">${money(o.total)}</td><td class="cell-center">${STATUS_BN[o.status]||''}</td><td class="cell-center"><span class="badge ${PAY_BADGE[o.paymentStatus]}">${PAY_BN[o.paymentStatus]||''}</span></td><td class="cell-center"><button class="icon-btn" onclick="viewInvoice('${o.id}')">🧾</button></td></tr>`; }).join('');
+  return `<div class="panel">
+    <div class="panel-head"><h3>🤝 শেয়ারহোল্ডারদের কেনাকাটা (ট্র্যাকিং)</h3>
+      <select onchange="onShBuyMonth(this)" style="padding:8px;border:1px solid var(--border);border-radius:7px;background:var(--bg);">${monthOptionsHtml(SH_BUY_MONTH, true)}</select></div>
+    <div class="flash" style="margin-bottom:12px;">এই সময়ে <b>${buyers}/${shs.length}</b> জন শেয়ারহোল্ডার কিনেছেন · মোট <b>${mine.length}</b>টি অর্ডার · মোট <b>${money(grand)}</b> (বাতিল অর্ডার ধরা হয়নি)</div>
+    ${unlinked ? `<div class="flash warn" style="margin-bottom:12px;">${unlinked}টি অর্ডারে ক্রেতার নাম কোনো শেয়ারহোল্ডারের নামের সাথে হুবহু মিলছে, কিন্তু অর্ডারে শেয়ারহোল্ডার বাছা নেই। <button class="btn btn-outline btn-sm" onclick="linkOldShareholderOrders()">🔗 মিলিয়ে দিন</button></div>` : ''}
+    <div class="table-wrap"><table><thead><tr><th>শেয়ারহোল্ডার</th><th>অর্ডার</th><th>মোট কেনা</th><th>বাকি</th><th>শেষ কেনা</th></tr></thead><tbody>${rows || '<tr><td colspan="5" class="empty-state">কোনো শেয়ারহোল্ডার নেই</td></tr>'}</tbody></table></div>
+    <h4 style="margin:16px 0 6px;">শেয়ারহোল্ডারদের অর্ডার${mine.length>40?' (সাম্প্রতিক ৪০টি)':''}</h4>
+    <div class="table-wrap"><table><thead><tr><th>অর্ডার</th><th>তারিখ</th><th>শেয়ারহোল্ডার</th><th>মোট</th><th>অবস্থা</th><th>পেমেন্ট</th><th></th></tr></thead><tbody>${list || '<tr><td colspan="7" class="empty-state">এই সময়ে শেয়ারহোল্ডারের কোনো অর্ডার নেই — অর্ডার ফর্মে "শেয়ারহোল্ডার ক্রেতা" বেছে দিন</td></tr>'}</tbody></table></div>
+  </div>`;
+}
+function linkOldShareholderOrders(){
+  if(!isAdmin()) return;
+  const shs = CACHE.shareholders, key = x => String(x||'').trim().toLowerCase(); let n = 0;
+  const orders = CACHE.orders.map(o => { if(o.shareholderId) return o; const sh = shs.find(s => key(s.name)===key(o.customerName)); if(sh){ n++; return {...o, shareholderId:sh.id}; } return o; });
+  if(!n){ alert('মেলানোর মতো অর্ডার নেই।'); return; }
+  if(!confirm(n + 'টি পুরোনো অর্ডারে নাম মিলিয়ে শেয়ারহোল্ডার বসানো হবে (টাকার হিসাব বদলাবে না)। এগোবেন?')) return;
+  saveCollection('orders', orders); renderShareholders();
+}
 function renderShareholders(){
   const t = shareholderTablesHtml();
   document.getElementById('pageContent').innerHTML = `
+    ${shareholderBuyHtml()}
     <div class="panel">
       <div class="panel-head"><h3>শেয়ারহোল্ডার তালিকা ও বিনিয়োগ</h3>
         <button class="btn btn-accent btn-sm" onclick="openShareholderForm()">+ নতুন শেয়ারহোল্ডার</button>
@@ -4868,7 +4910,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৫.৬';
+const APP_VERSION = '৫.৭';
 const APP_UPDATED_FALLBACK = '2026-10-21T14:00:00+06:00';
 function fmtUpdated(d){
   try{
