@@ -137,7 +137,8 @@ function attachListeners(){
       website: data.website ?? CACHE.settings.website,
       qrImg: data.qrImg ?? CACHE.settings.qrImg,
       qrPlaces: data.qrPlaces ?? CACHE.settings.qrPlaces,
-      qrCaption: data.qrCaption ?? CACHE.settings.qrCaption
+      qrCaption: data.qrCaption ?? CACHE.settings.qrCaption,
+      shop: data.shop ?? CACHE.settings.shop
     };
     Object.keys(merged).forEach(k => { if(merged[k] === undefined) delete merged[k]; });   // Firestore-এ undefined মান লেখা যায় না
     CACHE.settings = merged;
@@ -172,13 +173,14 @@ function onCloudUpdate(){
     const mh = document.getElementById('modalHolder');
     if(mh && mh.innerHTML.trim()) return;
     if(currentPage==='returns' && (document.getElementById('ret_order')||{}).value) return;
-    if(currentPage==='leaflet' || currentPage==='catalog') return;   // লিফলেট এডিটর চলাকালে রিফ্রেশ নয়
+    if(currentPage==='leaflet' || currentPage==='catalog' || currentPage==='webshop') return;   // লিফলেট এডিটর চলাকালে রিফ্রেশ নয়
     if(currentPage==='invoice'){ renderInvoice((document.getElementById('inv_order')||{}).value || ''); return; }
     // live re-render current page so every device sees updates instantly
     const renderers = {
       dashboard: renderDashboard, products: renderProducts, orders: renderOrders,
       purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck, leaflet: renderLeaflet, catalog: renderCatalog, productsales: renderProductSales,
-      invoice: renderInvoice, settings: renderSettings
+      invoice: renderInvoice, settings: renderSettings,
+      weborders: () => renderWebOrders(), webshop: () => renderWebShop()
     };
     (renderers[currentPage] || renderDashboard)();
   }
@@ -615,7 +617,8 @@ function go(page){
   const renderers = {
     dashboard: renderDashboard, products: renderProducts, orders: renderOrders,
     purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck, leaflet: renderLeaflet, catalog: renderCatalog, productsales: renderProductSales,
-    invoice: renderInvoice, settings: renderSettings
+    invoice: renderInvoice, settings: renderSettings,
+      weborders: () => renderWebOrders(), webshop: () => renderWebShop()
   };
   (renderers[page] || renderDashboard)();
 }
@@ -4910,21 +4913,22 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৫.৭';
-const APP_UPDATED_FALLBACK = '2026-10-21T14:00:00+06:00';
+const APP_VERSION = '৫.৮';
+const APP_UPDATED_FALLBACK = '2026-10-30T18:00:00+06:00';   // নতুন সংস্করণ বানালে এই তারিখ বদলান (সার্ভার Last-Modified না দিলে এটাই দেখায়, শুধু তারিখ)
 function fmtUpdated(d){
   try{
     return new Intl.DateTimeFormat('bn-BD', {timeZone:'Asia/Dhaka', day:'numeric', month:'long', year:'numeric', hour:'numeric', minute:'2-digit', hour12:true}).format(d);
   }catch(e){ return d.toLocaleString(); }
 }
 async function showAppVersion(){
-  let when = new Date(APP_UPDATED_FALLBACK);
+  let when = new Date(APP_UPDATED_FALLBACK), exact = false;
   try{
     const res = await fetch('app.js', {method:'HEAD', cache:'no-store'});
     const lm = res.headers.get('Last-Modified');
-    if(lm && !isNaN(new Date(lm))) when = new Date(lm);   // real publish time of the deployed file
+    if(lm && !isNaN(new Date(lm))){ when = new Date(lm); exact = true; }   // real publish time of the deployed file
   }catch(e){ /* offline: show the built-in date */ }
-  const text = `সংস্করণ ${APP_VERSION} · সর্বশেষ আপডেট: ${fmtUpdated(when)}`;
+  const dateOnly = d => { try{ return new Intl.DateTimeFormat('bn-BD', {timeZone:'Asia/Dhaka', day:'numeric', month:'long', year:'numeric'}).format(d); }catch(e){ return d.toLocaleDateString(); } };
+  const text = `সংস্করণ ${APP_VERSION} · সর্বশেষ আপডেট: ${exact ? fmtUpdated(when) : dateOnly(when)}`;
   ['appVersionLogin','appVersionSide'].forEach(id => { const el = document.getElementById(id); if(el) el.textContent = text; });
 }
 async function forceRefreshApp(){
