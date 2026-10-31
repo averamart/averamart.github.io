@@ -47,9 +47,15 @@
     var charge = (S.deliveryLocal || S.deliveryOutside)
       ? (S.localArea || 'স্থানীয়') + ' ' + tk(S.deliveryLocal) + ', অন্য জেলা ' + tk(S.deliveryOutside) + (S.freeDeliveryMin ? '। ' + tk(S.freeDeliveryMin) + '-এর বেশি কিনলে ফ্রি' : '')
       : 'ডেলিভারি চার্জ অর্ডার কনফার্মের সময় জানানো হবে';
-    $('strip').innerHTML = '<div><b>ক্যাশ অন ডেলিভারি</b>' + esc(S.codNote || 'পণ্য হাতে পেয়ে টাকা দিন') + '</div>' +
-      '<div><b>হোম ডেলিভারি</b>' + esc(charge) + '</div>' +
-      '<div><b>সহজ অর্ডার</b>কার্ট থেকে অর্ডার করুন অথবা সরাসরি মেসেজ দিন</div>';
+    $('strip').innerHTML = '<div><b>' + esc(S.strip1t || 'ক্যাশ অন ডেলিভারি') + '</b>' + esc(S.strip1d || S.codNote || 'পণ্য হাতে পেয়ে টাকা দিন') + '</div>' +
+      '<div><b>' + esc(S.strip2t || 'হোম ডেলিভারি') + '</b>' + esc(S.strip2d || charge) + '</div>' +
+      '<div><b>' + esc(S.strip3t || 'সহজ অর্ডার') + '</b>' + esc(S.strip3d || 'কার্ট থেকে অর্ডার করুন অথবা সরাসরি মেসেজ দিন') + '</div>';
+    $('howTitle').textContent = S.howTitle || 'কীভাবে অর্ডার করবেন';
+    $('how').innerHTML = [
+      [S.how1t || 'পছন্দ করুন', S.how1d || 'পণ্যের নিচের বাটনে ক্লিক করে কার্টে যোগ করুন।'],
+      [S.how2t || 'ঠিকানা দিন', S.how2d || 'নাম, মোবাইল নম্বর ও পূর্ণ ঠিকানা লিখুন।'],
+      [S.how3t || 'পণ্য হাতে পেয়ে টাকা দিন', S.how3d || 'অর্ডারের পর আমরা ফোনে কনফার্ম করব। টাকা দিতে হবে ডেলিভারির সময়।']
+    ].map(function (x) { return '<li><b>' + esc(x[0]) + '</b><span>' + esc(x[1]) + '</span></li>'; }).join('');
     var ICON_PH = '<svg viewBox="0 0 24 24" aria-hidden="true" style="stroke:#123C69;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg>';
     var ICON_FB = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.5 1.49-3.89 3.77-3.89 1.09 0 2.24.2 2.24.2v2.46h-1.26c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.44 2.89h-2.34v6.99A10 10 0 0 0 22 12z"/></svg>';
     var ICON_WA = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.47 14.38c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.94 1.17-.17.2-.35.22-.64.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.61-.92-2.2-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.8.37-.27.3-1.04 1.02-1.04 2.48 0 1.46 1.07 2.88 1.21 3.08.15.2 2.1 3.2 5.08 4.49.71.31 1.26.49 1.69.63.71.23 1.36.2 1.87.12.57-.09 1.76-.72 2-1.41.25-.69.25-1.29.17-1.41-.07-.12-.27-.2-.57-.35zM12.05 21.8h-.01a9.87 9.87 0 0 1-5.03-1.38l-.36-.21-3.74.98 1-3.65-.24-.37a9.86 9.86 0 0 1-1.51-5.26c0-5.45 4.44-9.88 9.9-9.88 2.64 0 5.12 1.03 6.99 2.9a9.82 9.82 0 0 1 2.89 6.99c0 5.45-4.44 9.88-9.89 9.88z"/></svg>';
@@ -243,7 +249,7 @@
       if (!s.exists) { if (!loaded) { $('grid').innerHTML = '<p class="empty">দোকান এখনো প্রস্তুত হয়নি। একটু পরে আবার দেখুন।</p>'; $('pcount').textContent = ''; } return; }
       loaded = true; var d = s.data(); apply(d);
       try { localStorage.setItem('am_public_cache', JSON.stringify(d)); } catch (e) {}
-    }).catch(function () { if (!loaded && !quiet) $('grid').innerHTML = '<p class="empty">দোকানের তথ্য আনা যায়নি। ইন্টারনেট দেখে পেইজ রিফ্রেশ করুন।</p>'; });
+    }).catch(function (e) { if (!loaded && !quiet) $('grid').innerHTML = '<p class="empty">দোকানের তথ্য আনা যায়নি। ইন্টারনেট দেখে পেইজ রিফ্রেশ করুন।<br><small>(কোড: ' + esc((e && e.code) || 'unknown') + ')</small></p>'; });
   }
   try { firebase.initializeApp(firebaseConfig); } catch (e) {}
   db = firebase.firestore();
