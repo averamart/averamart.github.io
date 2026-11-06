@@ -3149,11 +3149,10 @@ function deleteOrder(id){
    ============================================================ */
 let PU_EDIT_ID = '';
 let PU_Q = '', PU_PAY = 'all', PU_MONTH = curMonth();
-function purchaseRowsHtml(){
-  const admin = isAdmin();
+function purchaseFiltered(){
   const products = CACHE.products;
   const q = PU_Q.trim().toLowerCase();
-  const purchases = CACHE.purchases.filter(pu=>{
+  return CACHE.purchases.filter(pu=>{
     if(PU_MONTH!=='all' && mOf(pu.date)!==PU_MONTH) return false;
     if(PU_PAY==='Paid' && pu.paymentStatus!=='Paid') return false;
     if(PU_PAY==='Due' && pu.paymentStatus==='Paid') return false;
@@ -3161,6 +3160,18 @@ function purchaseRowsHtml(){
     const prod = products.find(p=>p.id===pu.productId);
     return [pu.id, pu.supplier, pu.voucherNo, pu.productName, prod&&prod.name, pu.date].some(v=>String(v||'').toLowerCase().includes(q));
   });
+}
+function purchaseTotalHtml(){
+  const list = purchaseFiltered();
+  const total = r2(list.reduce((t,p) => t + Number(p.totalCost||0), 0));
+  const due = r2(list.reduce((t,p) => t + purchaseDue(p), 0));
+  const lbl = PU_MONTH==='all' ? 'সব সময়ের' : monthLabel(PU_MONTH) + ' মাসের';
+  return `<b>${lbl} মোট ক্রয়: ${money(total)}</b> <span class="muted-cell">· ${list.length}টি এন্ট্রি · এর মধ্যে বকেয়া ${money(due)}</span>`;
+}
+function purchaseRowsHtml(){
+  const admin = isAdmin();
+  const products = CACHE.products;
+  const purchases = purchaseFiltered();
   let rows = purchases.slice().reverse().map(pu => {
     const freeQty = Number(pu.freeQty||0);
     const avgUnitCost = pu.qty>0 ? pu.totalCost/pu.qty : 0;
@@ -3184,6 +3195,7 @@ function onPurchaseSearch(){
   PU_PAY = document.getElementById('puPay').value;
   PU_MONTH = document.getElementById('puMonth').value;
   document.getElementById('puBody').innerHTML = purchaseRowsHtml();
+  document.getElementById('puTotal').innerHTML = purchaseTotalHtml();
 }
 function renderPurchases(){
   const admin = isAdmin();
@@ -3207,6 +3219,7 @@ function renderPurchases(){
           <option value="Due" ${PU_PAY==='Due'?'selected':''}>বকেয়া</option>
         </select>
       </div>
+      <div id="puTotal" style="background:var(--amber-soft,#FBF1DC);border-radius:10px;padding:10px 14px;margin:0 0 10px;">${purchaseTotalHtml()}</div>
       <div class="table-wrap"><table><thead><tr>
         <th>আইডি</th><th>তারিখ</th><th>ভাউচার নং</th><th>সরবরাহকারী</th><th>পণ্য</th><th>পরিমাণ</th><th>মোট খরচ</th><th>গড় খরচ/একক</th><th>পেমেন্ট</th><th>একশন</th>
       </tr></thead><tbody id="puBody">${purchaseRowsHtml()}</tbody></table></div>
@@ -4913,7 +4926,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৫.১০';
+const APP_VERSION = '৫.১১';
 const APP_UPDATED_FALLBACK = '2026-10-30T18:00:00+06:00';   // নতুন সংস্করণ বানালে এই তারিখ বদলান (সার্ভার Last-Modified না দিলে এটাই দেখায়, শুধু তারিখ)
 function fmtUpdated(d){
   try{
