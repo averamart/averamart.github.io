@@ -6,8 +6,8 @@
    ============================================================ */
 (function(){
 'use strict';
-const COL = 'averamart_weborders', PUB = 'averamart_public', PUB_IMG = 'averamart_public_img';
-const WS = {orders:[], first:true, unsub:null, pubIv:null, timer:null, filter:'new', lastSync:0, syncErr:'', busy:false};
+const COL = 'averamart_weborders', PUB = 'averamart_public', PUB_IMG = 'averamart_public_img', TRK = 'averamart_track';
+const WS = {trkSent:{}, orders:[], first:true, unsub:null, pubIv:null, timer:null, filter:'new', lastSync:0, syncErr:'', busy:false};
 const E = id => document.getElementById(id);
 const TS = () => firebase.firestore.FieldValue.serverTimestamp();
 const r2 = n => Math.round(Number(n||0)*100)/100;
@@ -29,7 +29,7 @@ function shopCfg(){
     heroText:'প্রকৃতির ছোঁয়া, নিরাপদ আস্থা — বাছাই করা অর্গানিক ও নিত্যপ্রয়োজনীয় পণ্য, ক্যাশ অন ডেলিভারিতে আপনার দরজায়।',
     phone1: st.phone||'', phone2:'', whatsapp: digits ? ('88' + digits.replace(/^88/,'').replace(/^0?/,'0')) : '',
     facebook:'', localArea:'রাজশাহী', deliveryLocal:0, deliveryOutside:0, freeDeliveryMin:0, minOrder:0,
-    codNote:'পণ্য হাতে পেয়ে টাকা পরিশোধ করুন', showHidden:false,
+    codNote:'পণ্য হাতে পেয়ে টাকা পরিশোধ করুন', showHidden:false, notifyEmail:'averamart.bd@gmail.com', kgStep:1, autoNew:false,
     strip1t:'', strip1d:'', strip2t:'', strip2d:'', strip3t:'', strip3d:'',
     howTitle:'', how1t:'', how1d:'', how2t:'', how2d:'', how3t:'', how3d:''
   }, st.shop || {});
@@ -41,14 +41,17 @@ function wsLot(p){
   const b = Number(p.priceBasis)||1;
   if(b!==1) return b;                                   // যেমন ৫ কেজির প্যাক → একবারে ৫ কেজি
   if(parsePackUnit(p.unit)) return 1;                   // "৫০০ গ্রাম" লেখা একক → একবারে ১ প্যাক
-  return (p.unit==='কেজি' || p.unit==='লিটার') ? 0.5 : 1;
+  const step = Number(((CACHE.settings||{}).shop||{}).kgStep) || 1;   // কেজি/লিটারে একবারে কতটুকু বাড়বে (সেটিংস থেকে ঠিক হয়)
+  return (p.unit==='কেজি' || p.unit==='লিটার') ? step : 1;
 }
 function wsItem(p){
-  const it = {id:p.id, n:p.name, c:p.category||'', u:p.unit||'কেজি', pr:Number(p.retail)||0, b:Number(p.priceBasis)||1, lot:wsLot(p), s:Math.max(0, r3(p.stock)), d:String(p.webDesc||'')};
+  const it = {id:p.id, n:p.name, c:p.category||'', br:p.brand||'', u:p.unit||'কেজি', pr:Number(p.retail)||0, b:Number(p.priceBasis)||1, lot:wsLot(p), s:Math.max(0, r3(p.stock)), d:String(p.webDesc||'')};
+  const qd = qtyDiscTiers(p).map(t => ({m:t.min, t:t.type, v:t.val})); if(qd.length) it.qd = qd;
   if(p.hasImg){ it.hi = 1; it.iv = p.imgV || 0; }
   return it;
 }
-function wsIncluded(){ const sh = (CACHE.settings && CACHE.settings.shop) || {}; return CACHE.products.filter(p => p.web && (sh.showHidden || !p.hidden) && Number(p.retail)>0); }
+function wsOn(p, sh){ return p.web===true || (!!sh.autoNew && p.web===undefined); }
+function wsIncluded(){ const sh = (CACHE.settings && CACHE.settings.shop) || {}; return CACHE.products.filter(p => wsOn(p, sh) && (sh.showHidden || !p.hidden) && Number(p.retail)>0); }
 async function wsThumb(pid, v){
   const snap = await docRef('img__'+pid).get();
   if(!snap.exists) return null;
@@ -79,7 +82,7 @@ async function wsPublish(manual){
     const pub = {
       shop:{enabled:!!sh.enabled, name:'Avera Mart', tagline:st.tagline||'', address:st.businessAddress||'', heroTitle:sh.heroTitle, heroText:sh.heroText,
         phone1:sh.phone1, phone2:sh.phone2, whatsapp:String(sh.whatsapp||'').replace(/\D/g,''), facebook:sh.facebook, localArea:sh.localArea,
-        deliveryLocal:Number(sh.deliveryLocal)||0, deliveryOutside:Number(sh.deliveryOutside)||0, freeDeliveryMin:Number(sh.freeDeliveryMin)||0, minOrder:Number(sh.minOrder)||0, codNote:sh.codNote,
+        deliveryLocal:Number(sh.deliveryLocal)||0, deliveryOutside:Number(sh.deliveryOutside)||0, freeDeliveryMin:Number(sh.freeDeliveryMin)||0, minOrder:Number(sh.minOrder)||0, codNote:sh.codNote, notifyEmail:String(sh.notifyEmail||'').trim(),
         strip1t:sh.strip1t||'', strip1d:sh.strip1d||'', strip2t:sh.strip2t||'', strip2d:sh.strip2d||'', strip3t:sh.strip3t||'', strip3d:sh.strip3d||'',
         howTitle:sh.howTitle||'', how1t:sh.how1t||'', how1d:sh.how1d||'', how2t:sh.how2t||'', how2d:sh.how2d||'', how3t:sh.how3t||'', how3d:sh.how3d||''},
       items, updatedAt:Date.now()
@@ -93,17 +96,33 @@ async function wsPublish(manual){
 }
 function wsSchedule(){ clearTimeout(WS.timer); WS.timer = setTimeout(() => wsPublish(false), 2500); }
 
+/* কাস্টমারের "অর্ডার ট্র্যাক" — ওয়েব অর্ডার থেকে হওয়া অর্ডারের অবস্থা (শুধু অবস্থা, কোনো ব্যক্তিগত তথ্য নয়) পাবলিক ডকে সিঙ্ক */
+const TRK_MAP = {Pending:'confirmed', Processing:'packing', Delivered:'delivered', Cancelled:'cancelled'};
+function wsSyncTrack(){
+  if(typeof db==='undefined' || !db || !getSession()) return;
+  CACHE.orders.forEach(o => {
+    if(!o.webOrderId) return;
+    const s = TRK_MAP[o.status]; if(!s || WS.trkSent[o.webOrderId]===s) return;
+    const old = (s==='delivered' || s==='cancelled') && o.date && (Date.now() - new Date(o.date).getTime()) > 45*864e5;
+    if(old && WS.trkSent[o.webOrderId]===undefined){ WS.trkSent[o.webOrderId] = s; return; }   // পুরনো শেষ-হওয়া অর্ডারে বাড়তি লেখা নয়
+    WS.trkSent[o.webOrderId] = s;
+    db.collection(TRK).doc(o.webOrderId).set({s, t:TS()}).catch(() => { delete WS.trkSent[o.webOrderId]; });
+  });
+}
+setTimeout(wsSyncTrack, 8000);
+
 /* পণ্য বদলালেই (স্টক/দাম/নাম) পাবলিক কপি নিজে থেকে হালনাগাদ */
 const _saveCollection = window.saveCollection;
 window.saveCollection = function(name){
   const r = _saveCollection.apply(this, arguments);
   if(name==='products' && r!==false) wsSchedule();
+  if(name==='orders' && r!==false) wsSyncTrack();
   return r;
 };
 
 /* ---------- ওয়েব অর্ডার শোনা ---------- */
 const _attach = window.attachListeners;
-window.attachListeners = function(){ _attach.apply(this, arguments); startOrders(); };
+window.attachListeners = function(){ _attach.apply(this, arguments); startOrders(); setTimeout(() => wsPublish(false), 9000); };   // লগইনের পর দোকানের কপি একবার সতেজ করা
 function startOrders(){
   if(WS.unsub) return;
   WS.unsub = db.collection(COL).orderBy('createdAt','desc').limit(300).onSnapshot(snap => {
@@ -152,6 +171,8 @@ function checkOrder(w){
     const p = CACHE.products.find(x => x.id===wi.pid);
     if(!p){ issues.push(`${wi.name}: পণ্যটি এখন তালিকায় নেই`); return; }
     if(Math.abs((Number(p.retail)||0) - Number(wi.price)) > 0.0001) issues.push(`${wi.name}: দাম বদলেছে (কাস্টমার দেখেছে ${money(wi.price)}, এখন ${money(p.retail)} প্রতি ${p.unit||'কেজি'}) — রূপান্তরে এখনকার দাম বসবে`);
+    const tmp = {productId:p.id, qty:Number(wi.qty), unitPrice:Number(p.retail)||0, discType:'amt', discVal:0}; applyAutoDisc(tmp); const nd = lineDisc(tmp);
+    if(Math.abs(nd - Number(wi.disc||0)) > 0.01) issues.push(`${wi.name}: পরিমাণ-ছাড় বদলেছে (কাস্টমার দেখেছে ${money(wi.disc||0)}, এখন ${money(nd)}) — রূপান্তরে এখনকার ছাড় বসবে`);
     if(Number(p.stock) < Number(wi.qty)) issues.push(`${wi.name}: স্টকে আছে ${fmtStock(p.stock,p)}, চেয়েছে ${wi.qty} ${wi.unit||''}`);
   });
   return issues;
@@ -160,13 +181,13 @@ function orderCard(w){
   const st = w.status;
   const badge = st==='new' ? '<span class="badge badge-pending">নতুন</span>' : st==='imported' ? `<span class="badge badge-delivered">অর্ডারে নেওয়া হয়েছে${w.orderId?' · '+esc(w.orderId):''}</span>` : '<span class="badge badge-cancelled">বাতিল</span>';
   const issues = st==='new' ? checkOrder(w) : [];
-  const lines = (w.items||[]).map(it => `<tr><td>${esc(it.name)}</td><td>${esc(it.qty)} ${esc(it.unit||'')}</td><td class="cell-num">${money(it.line)}</td></tr>`).join('');
+  const lines = (w.items||[]).map(it => `<tr><td>${esc(it.name)}${Number(it.disc)>0?`<br><span class="muted-cell" style="font-size:11.5px;">ছাড় −${money(it.disc)} বাদ</span>`:''}</td><td>${esc(it.qty)} ${esc(it.unit||'')}</td><td class="cell-num">${money(it.line)}</td></tr>`).join('');
   return `<div class="panel" style="${st==='new'?'border-left:4px solid var(--amber);':''}">
     <div class="panel-head"><h3 style="margin:0;">${esc(w.id)} ${badge}</h3><span class="muted-cell">${fmtWhen(w)}</span></div>
     <p style="margin:6px 0;"><b>${esc(w.customerName)}</b> · <a href="tel:${esc(w.phone)}">${esc(w.phone)}</a><br><span class="muted-cell">${esc(w.address)}</span>${w.note?`<br>📝 <span class="muted-cell">${esc(w.note)}</span>`:''}
       <br><span class="muted-cell">এলাকা: ${w.area==='outside'?'অন্য জেলা':'স্থানীয়'} · পেমেন্ট: ক্যাশ অন ডেলিভারি</span></p>
     <div class="table-wrap"><table><thead><tr><th>পণ্য</th><th>পরিমাণ</th><th>টাকা</th></tr></thead><tbody>${lines}
-      <tr><td colspan="2" style="text-align:right;">পণ্যের দাম</td><td class="cell-num">${money(w.subtotal)}</td></tr>
+      <tr><td colspan="2" style="text-align:right;">পণ্যের দাম${Number(w.discount)>0?' (পরিমাণ-ছাড়ের পর)':''}</td><td class="cell-num">${money(w.subtotal)}</td></tr>
       <tr><td colspan="2" style="text-align:right;">ডেলিভারি ${w.deliveryTbd?'(কাস্টমারকে জানানো হয়নি — ঠিক করুন)':''}</td><td class="cell-num">${w.deliveryTbd?'—':money(w.delivery)}</td></tr>
       <tr><td colspan="2" style="text-align:right;"><b>মোট</b></td><td class="cell-num">${money(Number(w.subtotal||0)+(w.deliveryTbd?0:Number(w.delivery||0)))}</td></tr></tbody></table></div>
     ${issues.length ? `<div class="flash" style="margin-top:10px;background:#FFF4D6;">⚠️ <b>দেখে নিন:</b><br>${issues.map(esc).join('<br>')}</div>` : ''}
@@ -194,7 +215,9 @@ window.wsImport = function(id){
     const p = CACHE.products.find(x => x.id===wi.pid); if(!p) return;
     const qty = Number(wi.qty), unitPrice = Number(p.retail)||0;
     if(!(qty>0) || !(unitPrice>0)) return;
-    items.push({productId:p.id, qty, unitPrice, standardPrice:unitPrice, lineDiscount:0, discType:'amt', discVal:0, lineSurcharge:0, surType:'amt', surVal:0, pl:'retail', dq:qty, du:p.unit||'কেজি'});
+    const it = {productId:p.id, qty, unitPrice, standardPrice:unitPrice, lineDiscount:0, discType:'amt', discVal:0, lineSurcharge:0, surType:'amt', surVal:0, pl:'retail', dq:qty, du:p.unit||'কেজি'};
+    applyAutoDisc(it);                                   // পণ্যের পরিমাণ-ছাড় অ্যাডমিন অর্ডারের মতোই বসে
+    items.push(it);
   });
   if(!items.length){ alert('এই অর্ডারের কোনো পণ্য এখন তালিকায় নেই — অর্ডারে নেওয়া গেল না। কাস্টমারকে ফোন করে বাতিল করুন বা হাতে নতুন অর্ডার দিন।'); return; }
   const issues = checkOrder(w);
@@ -220,7 +243,9 @@ window.wsImport = function(id){
 window.wsCancel = function(id){
   const w = WS.orders.find(x => x.id===id); if(!w || w.status!=='new') return;
   if(!confirm(`${w.customerName}-এর অর্ডার (${id}) বাতিল করবেন?`)) return;
-  db.collection(COL).doc(id).update({status:'cancelled', handledBy:(getSession()||{}).role||'', handledAt:TS()}).catch(e => alert('বাতিল করা যায়নি: ' + (e.message||e)));
+  db.collection(COL).doc(id).update({status:'cancelled', handledBy:(getSession()||{}).role||'', handledAt:TS()})
+    .then(() => { WS.trkSent[id] = 'cancelled'; return db.collection(TRK).doc(id).set({s:'cancelled', t:TS()}); })
+    .catch(e => alert('বাতিল করা যায়নি: ' + (e.message||e)));
 };
 
 /* ---------- অনলাইন দোকান (সেটিংস ও পণ্য বাছাই) — শুধু অ্যাডমিন ---------- */
@@ -232,8 +257,8 @@ function syncStatusHtml(){
 function prodRow(p){
   const n = wsIncluded().some(x => x.id===p.id);
   return `<tr style="${p.hidden?'opacity:.6;':''}">
-    <td><input type="checkbox" ${p.web?'checked':''} onchange="wsToggle('${p.id}',this.checked)" title="অনলাইনে দেখাবে"></td>
-    <td>${esc(p.name)}<br><span class="muted-cell" style="font-size:11.5px;">${p.id} · ${esc(p.category||'')}${p.hidden?' · <b>লুকানো পণ্য</b>':''}${p.web && !p.hidden && !(Number(p.retail)>0)?' · <b style="color:var(--red)">বিক্রয়মূল্য নেই</b>':''}</span></td>
+    <td><input type="checkbox" ${wsOn(p, shopCfg())?'checked':''} onchange="wsToggle('${p.id}',this.checked)" title="অনলাইনে দেখাবে"></td>
+    <td>${esc(p.name)}<br><span class="muted-cell" style="font-size:11.5px;">${p.id} · ${esc(p.category||'ক্যাটাগরি নেই')}${p.brand?' · '+esc(p.brand):''}${p.hidden?' · <b>লুকানো পণ্য</b>':''}${p.web && !p.hidden && !(Number(p.retail)>0)?' · <b style="color:var(--red)">বিক্রয়মূল্য নেই</b>':''}</span></td>
     <td class="cell-num">${money(packPrice(p,'retail'))}<br><span class="muted-cell" style="font-size:11.5px;">/ ${fmtBasis(p)||('১ '+esc(p.unit||'কেজি'))}</span></td>
     <td>${fmtStock(p.stock,p)}</td>
     <td><input value="${esc(p.webDesc||'')}" maxlength="120" placeholder="ছোট বর্ণনা (ঐচ্ছিক)" style="width:100%;min-width:150px;padding:6px;border:1px solid var(--border);border-radius:7px;" onchange="wsDesc('${p.id}',this.value)"></td>
@@ -269,6 +294,9 @@ window.renderWebShop = function(){
         ${fld('ws_freeDeliveryMin','এর বেশি কিনলে ডেলিভারি ফ্রি (৳, ০ = নেই)',c.freeDeliveryMin,'','number')}
         ${fld('ws_minOrder','সর্বনিম্ন অর্ডার (৳, ০ = নেই)',c.minOrder,'','number')}
         ${fld('ws_codNote','টাকা দেওয়ার নিয়ম (লেখা)',c.codNote)}
+        <div class="form-field" style="grid-column:1/-1;"><label>নতুন অর্ডারের খবর যে ইমেইলে যাবে (খালি রাখলে ইমেইল যাবে না)</label><div style="display:flex;gap:8px;flex-wrap:wrap;"><input id="ws_notifyEmail" type="email" value="${esc(c.notifyEmail)}" placeholder="averamart.bd@gmail.com" style="flex:1;min-width:220px;"><button class="btn btn-outline btn-sm" type="button" onclick="wsTestEmail()">✉️ টেস্ট ইমেইল পাঠান</button></div><span class="muted-cell">প্রথমবার টেস্ট পাঠালে ওই ইনবক্সে একটি "Activate" ইমেইল আসবে (স্প্যাম ফোল্ডারও দেখুন) — সেটির বাটনে ক্লিক করলে চালু হবে। ইমেইল বদলালে আবার টেস্ট পাঠিয়ে চালু করতে হবে। এই ঠিকানা দোকান পেইজের কোডে দেখা যায়, তাই শুধু অর্ডারের জন্য ঠিকানা ব্যবহার করুন।</span></div>
+        <div class="form-field"><label>কেজি/লিটারের পণ্যে একবারে কতটুকু বাড়বে</label><select id="ws_kgStep"><option value="1" ${Number(c.kgStep)!==0.5?'selected':''}>১ (১, ২, ৩ কেজি...)</option><option value="0.5" ${Number(c.kgStep)===0.5?'selected':''}>০.৫ (আধা কেজি করে)</option></select><span class="muted-cell">কাস্টমার সংখ্যা হাতে লিখেও দিতে পারে (যেমন ২৫)।</span></div>
+        <div class="form-field" style="grid-column:1/-1;"><label style="display:flex;gap:8px;align-items:center;"><input id="ws_autoNew" type="checkbox" ${c.autoNew?'checked':''} onchange="wsAutoNew(this.checked)"> <b>নতুন পণ্য নিজে থেকে অনলাইনে যাক</b> <span class="muted-cell">(চালু করলে এখনকার পণ্যের অবস্থা বদলায় না; এরপর যোগ করা নতুন পণ্য দোকানে চলে যায়। বিক্রয়মূল্য দিতে ভুলবেন না)</span></label></div>
         <div class="form-field" style="grid-column:1/-1;"><label style="display:flex;gap:8px;align-items:center;"><input id="ws_showHidden" type="checkbox" ${c.showHidden?'checked':''} onchange="wsShowHidden(this.checked)"> <b>লুকানো পণ্যও অনলাইনে দেখানো যাবে</b> <span class="muted-cell">(বন্ধ থাকলে লুকানো পণ্য টিক দেওয়া থাকলেও যাবে না। চাপলেই কার্যকর হয়)</span></label></div>
       </div>
       <h3 style="margin-top:16px;">হোম পেইজের তিনটি বক্স (খালি রাখলে আগের লেখাই থাকবে)</h3>
@@ -310,15 +338,25 @@ window.wsSaveCfg = async function(){
   const shop = {setup:true, enabled:E('ws_enabled').checked, heroTitle:E('ws_heroTitle').value.trim(), heroText:E('ws_heroText').value.trim(),
     phone1:E('ws_phone1').value.trim(), phone2:E('ws_phone2').value.trim(), whatsapp:E('ws_whatsapp').value.replace(/\D/g,''), facebook:E('ws_facebook').value.trim(),
     localArea:E('ws_localArea').value.trim() || 'স্থানীয়', deliveryLocal:numVal('ws_deliveryLocal'), deliveryOutside:numVal('ws_deliveryOutside'),
-    freeDeliveryMin:numVal('ws_freeDeliveryMin'), minOrder:numVal('ws_minOrder'), codNote:E('ws_codNote').value.trim(), showHidden:E('ws_showHidden').checked,
+    freeDeliveryMin:numVal('ws_freeDeliveryMin'), minOrder:numVal('ws_minOrder'), codNote:E('ws_codNote').value.trim(), showHidden:E('ws_showHidden').checked, kgStep:Number(E('ws_kgStep').value)===0.5?0.5:1, autoNew:E('ws_autoNew').checked, notifyEmail:E('ws_notifyEmail').value.trim(),
     strip1t:E('ws_strip1t').value.trim(), strip1d:E('ws_strip1d').value.trim(), strip2t:E('ws_strip2t').value.trim(), strip2d:E('ws_strip2d').value.trim(), strip3t:E('ws_strip3t').value.trim(), strip3d:E('ws_strip3d').value.trim(),
     howTitle:E('ws_howTitle').value.trim(), how1t:E('ws_how1t').value.trim(), how1d:E('ws_how1d').value.trim(), how2t:E('ws_how2t').value.trim(), how2d:E('ws_how2d').value.trim(), how3t:E('ws_how3t').value.trim(), how3d:E('ws_how3d').value.trim()};
   if(shop.facebook && !/^https?:\/\//i.test(shop.facebook)){ alert('ফেসবুক লিংক https:// দিয়ে শুরু হতে হবে।'); return; }
+  if(shop.notifyEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(shop.notifyEmail)){ alert('ইমেইল ঠিকানা সঠিক নয়।'); return; }
   saveSettings({...CACHE.settings, shop});
   E('wsStatus').innerHTML = '⏳ প্রকাশ হচ্ছে...';
   await wsPublish(true);
   E('wsStatus').innerHTML = syncStatusHtml();
   if(!WS.syncErr) alert('✅ সংরক্ষিত ও প্রকাশিত।' + (shop.enabled ? '' : '\n\n(মনে রাখবেন: "অনলাইন অর্ডার চালু" টিক না থাকায় কাস্টমার এখন অর্ডার দিতে পারবে না।)'));
+};
+window.wsTestEmail = async function(){
+  const to = E('ws_notifyEmail').value.trim();
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)){ alert('আগে সঠিক ইমেইল ঠিকানা লিখুন।'); return; }
+  try{
+    const r = await fetch('https://formsubmit.co/ajax/' + encodeURIComponent(to), {method:'POST', headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify({_subject:'আভেরা মার্ট — টেস্ট ইমেইল', _template:'table', _captcha:'false', 'বার্তা':'এটি টেস্ট। নতুন অর্ডার এলে এভাবে ইমেইল আসবে।'})});
+    alert(r.ok ? '✅ টেস্ট পাঠানো হয়েছে। ' + to + '-এর ইনবক্স (ও স্প্যাম) দেখুন। প্রথমবার "Activate" ইমেইলের বাটনে ক্লিক করুন, তারপর আবার টেস্ট পাঠিয়ে দেখুন।' : '⚠️ পাঠানো যায়নি (কোড ' + r.status + ')। কিছুক্ষণ পরে আবার চেষ্টা করুন।');
+  }catch(e){ alert('⚠️ পাঠানো যায়নি — ইন্টারনেট দেখুন।'); }
 };
 window.wsSyncNow = async function(){ E('wsStatus').innerHTML = '⏳ সিঙ্ক হচ্ছে...'; await wsPublish(true); E('wsStatus').innerHTML = syncStatusHtml(); };
 function saveProductsPatch(fn){ const products = CACHE.products.map(p => fn(p) || p); saveCollection('products', products); }
@@ -328,6 +366,12 @@ window.wsShowHidden = function(on){
   if(!isAdmin()) return;
   saveSettings({...CACHE.settings, shop:{...(CACHE.settings.shop||{}), showHidden:!!on}});
   wsSchedule(); const el = E('wsInc'); if(el) el.textContent = wsIncluded().length + 'টি';
+};
+window.wsAutoNew = function(on){
+  if(!isAdmin()) return;
+  if(on){ saveProductsPatch(p => p.web===undefined ? {...p, web:false} : null); }   // এখনকার পণ্যের অবস্থা যেমন আছে তেমনই থাকবে; শুধু ভবিষ্যতের নতুন পণ্য নিজে থেকে যাবে
+  saveSettings({...CACHE.settings, shop:{...(CACHE.settings.shop||{}), autoNew:!!on}});
+  wsSchedule(); renderWebShop();
 };
 window.wsAll = function(on){
   const sh = CACHE.settings.shop || {};

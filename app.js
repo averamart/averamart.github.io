@@ -21,6 +21,7 @@ const CACHE = {
   settings: {
     dividendPercent: 50,
     productCategories: ['খাদ্যশস্য','ডাল','তেল','মসলা','অর্গানিক আইটেম','অন্যান্য'],
+    productBrands: [],
     expenseCategories: ['দোকান ভাড়া','পরিবহন ও কুরিয়ার','প্যাকেজিং','বেতন','বিদ্যুৎ বিল','অন্যান্য'],
     businessAddress: 'রাজশাহী, বাংলাদেশ',
     tagline: 'প্রকৃতির ছোঁয়া, নিরাপদ আস্থা',
@@ -130,6 +131,8 @@ function attachListeners(){
     const merged = {
       dividendPercent: data.dividendPercent ?? CACHE.settings.dividendPercent,
       productCategories: data.productCategories && data.productCategories.length ? data.productCategories : CACHE.settings.productCategories,
+      productBrands: Array.isArray(data.productBrands) ? data.productBrands : (CACHE.settings.productBrands || []),
+      brandMigrated: data.brandMigrated ?? CACHE.settings.brandMigrated,
       expenseCategories: data.expenseCategories && data.expenseCategories.length ? data.expenseCategories : CACHE.settings.expenseCategories,
       businessAddress: data.businessAddress || CACHE.settings.businessAddress,
       tagline: data.tagline ?? CACHE.settings.tagline,
@@ -337,7 +340,7 @@ function prodMatches(q, limit, includeHidden){
   const res = [];
   CACHE.products.forEach(p => {
     if(!includeHidden && p.hidden) return;
-    const nm = kk(p.name), hay = nm + '|' + kk(p.id) + '|' + kk(p.category||'');
+    const nm = kk(p.name), hay = nm + '|' + kk(p.id) + '|' + kk(p.category||'') + '|' + kk(p.brand||'');
     if(toks.every(t => hay.includes(t))) res.push({p, r: nm.startsWith(toks[0]) ? 0 : (nm.includes(toks[0]) ? 1 : 2)});
   });
   res.sort((a,b) => a.r-b.r || String(a.p.name).localeCompare(String(b.p.name),'bn'));
@@ -387,7 +390,7 @@ function custPick(c){
 function custSuggestInit(){ ['o_name','o_phone','o_addr'].forEach(id => sgAttach(id, custFind, custLabel, custPick)); }
 function purchaseSuggestInit(){
   sgAttach('pu_supplier', supplierFind, n => `<b>${esc(n)}</b>`, n => { const e = document.getElementById('pu_supplier'); if(e) e.value = n; });
-  sgAttach('pu_pname', q => prodMatches(q, 10, true), p => `<b>${esc(p.name)}</b> <span class="muted-cell">${esc(p.unit||'কেজি')} · স্টক ${fmtStock(p.stock, p)}</span>`, p => { const e = document.getElementById('pu_pname'); if(e){ e.value = p.name; onPurchaseNameType(); } });
+  sgAttach('pu_pname', q => prodMatches(q, 10, true), p => `<b>${esc(p.name)}</b> <span class="muted-cell">${esc(p.id)}${p.brand?' · '+esc(p.brand):''} · ${esc(p.unit||'কেজি')} · স্টক ${fmtStock(p.stock, p)}</span>`, p => { const e = document.getElementById('pu_pname'); if(e){ e.value = p.name; onPurchaseNameType(); } });
 }
 const PRICE_LISTS = {retail:'খুচরা', corporate:'কর্পোরেট'};
 function unitListPrice(p, list){ const v = Number(p.corporate); return (list==='corporate' && v>0) ? v : Number(p.retail||0); }
@@ -2423,7 +2426,7 @@ function productRowsHtml(){
   const admin = isAdmin();
   const q = PROD_Q.trim().toLowerCase();
   const list = CACHE.products.filter(p=>{
-    if(q && !(String(p.name).toLowerCase().includes(q) || String(p.id).toLowerCase().includes(q) || String(p.category||'').toLowerCase().includes(q))) return false;
+    if(q && !(String(p.name).toLowerCase().includes(q) || String(p.id).toLowerCase().includes(q) || String(p.category||'').toLowerCase().includes(q) || String(p.brand||'').toLowerCase().includes(q))) return false;
     if(PROD_FILTER==='active') return !p.hidden;
     if(PROD_FILTER==='hidden') return !!p.hidden;
     if(PROD_FILTER==='low') return !p.hidden && Number(p.stock)<=Number(p.minStock);
@@ -2435,7 +2438,8 @@ function productRowsHtml(){
     <tr class="${hlClass('products',p.id)}" style="${p.hidden?'opacity:.7;':''}">
       <td>${p.id}</td>
       <td>${esc(p.name)}${p.hidden ? ' <span class="badge badge-hidden">লুকানো</span><br><span class="muted-cell" style="font-size:11.5px;">অর্ডার সার্চ/ইনভেন্টরিতে আসবে না — ক্রয় এন্ট্রি দিলে চালু হবে</span>' : ''}${p.priceTiers ? `<br><span class="muted-cell">${esc(p.priceTiers)}</span>` : ''}${qtyDiscText(p) ? `<br><span class="muted-cell" style="font-size:11.5px;">${esc(qtyDiscText(p))}</span>` : ''}</td>
-      <td>${esc(p.category)}</td>
+      <td>${p.category ? esc(p.category) : '<span class="badge badge-low">বাছাই করুন</span>'}</td>
+      <td>${esc(p.brand||'') || '<span class="muted-cell">—</span>'}</td>
       <td>${esc(p.unit||'কেজি')}</td>
       ${admin ? `<td class="cell-num">${money(packPrice(p,'cost'))}${fmtBasis(p)?`<br><span class="muted-cell" style="font-size:11.5px;">/ ${fmtBasis(p)}</span>`:''}</td>` : ''}
       <td class="cell-num">${money(packPrice(p,'retail'))}${fmtBasis(p)?`<br><span class="muted-cell" style="font-size:11.5px;">/ ${fmtBasis(p)}</span>`:`<br><span class="muted-cell" style="font-size:11.5px;">/ ১ ${esc(p.unit||'কেজি')}</span>`}</td>
@@ -2446,7 +2450,7 @@ function productRowsHtml(){
         <button class="icon-btn" onclick="openProductForm('${p.id}')">✏️</button>
         ${admin ? `<button class="icon-btn danger" onclick="deleteProduct('${p.id}')">🗑️</button>` : ''}
       </td>
-    </tr>`).join('') || `<tr><td colspan="${admin?9:8}" class="empty-state">${CACHE.products.length ? 'এই ফিল্টারে কোনো পণ্য নেই' : 'কোনো পণ্য যোগ করা হয়নি'}</td></tr>`;
+    </tr>`).join('') || `<tr><td colspan="${admin?10:9}" class="empty-state">${CACHE.products.length ? 'এই ফিল্টারে কোনো পণ্য নেই' : 'কোনো পণ্য যোগ করা হয়নি'}</td></tr>`;
 }
 function onProductFilter(){
   PROD_Q = document.getElementById('prodSearch').value;
@@ -2482,7 +2486,7 @@ function renderProducts(){
         <span class="muted-cell" id="prodCount">দেখাচ্ছে ${PROD_COUNT}টি / মোট ${CACHE.products.length}টি পণ্য</span>
       </div>
       <div class="table-wrap"><table><thead><tr>
-        <th>আইডি</th><th>পণ্যের নাম</th><th>ক্যাটাগরি</th><th>একক</th>
+        <th>আইডি</th><th>পণ্যের নাম</th><th>ক্যাটাগরি</th><th>ব্র্যান্ড</th><th>একক</th>
         ${isAdmin?'<th>ক্রয়মূল্য (কত পরিমাণে)</th>':''}
         <th>বিক্রয়মূল্য (কত পরিমাণে)</th><th>কর্পোরেট মূল্য</th><th>স্টক</th><th>একশন</th>
       </tr></thead><tbody id="prodBody">${rowsHtml}</tbody></table></div>
@@ -2618,7 +2622,14 @@ function openProductForm(id){
         <div class="form-field"><label>পণ্যের নাম</label><input id="f_name" value="${p?esc(p.name):''}"></div>
         <div class="form-field"><label>ক্যাটাগরি</label>
           <select id="f_cat">
-            ${CACHE.settings.productCategories.map(c=>`<option ${p&&p.category===c?'selected':''}>${esc(c)}</option>`).join('')}
+            <option value="" ${p&&p.category?'':'selected'}>— ক্যাটাগরি বাছাই করুন —</option>
+            ${(p&&p.category&&!CACHE.settings.productCategories.includes(p.category) ? [...CACHE.settings.productCategories, p.category] : CACHE.settings.productCategories).map(c=>`<option ${p&&p.category===c?'selected':''}>${esc(c)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-field"><label>ব্র্যান্ড <span class="muted-cell">(সেটিংস থেকে ব্র্যান্ড যোগ করা যায়)</span></label>
+          <select id="f_brand">
+            <option value="" ${p&&p.brand?'':'selected'}>— ব্র্যান্ড নেই —</option>
+            ${(p&&p.brand&&!(CACHE.settings.productBrands||[]).includes(p.brand) ? [...(CACHE.settings.productBrands||[]), p.brand] : (CACHE.settings.productBrands||[])).map(b=>`<option ${p&&p.brand===b?'selected':''}>${esc(b)}</option>`).join('')}
           </select>
         </div>
         <div class="form-field"><label>পরিমাণ/একক — মসলা, চাল, ডাল ইত্যাদির জন্য "কেজি" দিন, ডাল/চালের মতো পণ্যে "কেজি" রাখুন</label>
@@ -2679,10 +2690,12 @@ function saveProduct(id){
     seen.add(mn); qd.push({min:mn, type:ty, val:vl});
   }
   qd.sort((a,b) => a.min-b.min);
+  if(!document.getElementById('f_cat').value){ alert('ক্যাটাগরি বাছাই করুন।'); return; }
   const data = {
     qtyDisc: qd,
     name,
     category: document.getElementById('f_cat').value,
+    brand: document.getElementById('f_brand').value,
     cost: (() => { const old0 = id ? products.find(p=>p.id===id) : null; if(!isAdmin) return old0 ? (old0.cost||0) : 0; const v = Number(document.getElementById('f_cost').value||0); if(old0 && (Number(old0.priceBasis)||1)===basis && Math.abs(v - packPrice(old0,'cost')) < 0.0051) return old0.cost; return per(v); })(),
     unit: document.getElementById('f_unit').value.trim() || 'কেজি',
     priceBasis: basis,
@@ -2902,7 +2915,7 @@ function openOrderForm(id, from){
 
       <div style="margin-top:18px;">
         <label style="font-size:12.5px;color:var(--text-muted);display:block;margin-bottom:5px;">পণ্য খুঁজুন ও যোগ করুন</label>
-        <input id="o_search" type="text" placeholder="পণ্যের নাম লিখুন..." oninput="renderProductSearch(this.value)" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:7px;background:var(--bg);">
+        <input id="o_search" type="text" placeholder="পণ্যের নাম বা আইডি (যেমন P012) লিখুন..." oninput="renderProductSearch(this.value)" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:7px;background:var(--bg);">
         <div id="searchResults" class="search-results"></div>
       </div>
 
@@ -2931,7 +2944,7 @@ function renderProductSearch(query){
   box.innerHTML = matches.map(p => `
     <div class="search-result-item" onclick="addToCart('${p.id}')" style="flex-direction:column;align-items:flex-start;gap:2px;">
       <div style="display:flex;justify-content:space-between;width:100%;">
-        <span>${esc(p.name)}</span>
+        <span>${esc(p.name)} <span class="muted-cell" style="font-size:11.5px;">· ${esc(p.id)}${p.brand?' · '+esc(p.brand):''}</span></span>
         <span class="muted-cell">স্টক: ${fmtStock(p.stock, p)} · ${money(unitListPrice(p, ORDER_PL))}/${esc(p.unit||'কেজি')}</span>
       </div>
       ${p.priceTiers ? `<span class="muted-cell" style="font-size:11.5px;">${esc(p.priceTiers)}</span>` : ''}
@@ -3423,6 +3436,8 @@ function openPurchaseForm(id){
         <div class="form-grid">
           <div class="form-field"><label>ক্যাটাগরি</label>
             <select id="pu_newcat">${cats.map(c=>`<option ${c==='অন্যান্য'?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
+          <div class="form-field"><label>ব্র্যান্ড</label>
+            <select id="pu_newbrand"><option value="">— ব্র্যান্ড নেই —</option>${(CACHE.settings.productBrands||[]).map(b=>`<option>${esc(b)}</option>`).join('')}</select></div>
           <div class="form-field"><label>একক (এই এককেই নিচের পরিমাণ লিখবেন)</label>
             <select id="pu_newunit" onchange="refreshPurchaseUnit()">${UNIT_OPTIONS.map(u=>`<option ${u==='কেজি'?'selected':''}>${u}</option>`).join('')}</select></div>
           <div class="form-field"><label>বিক্রয়মূল্য (৳) — প্রতি এককে (পরে বদলানো যাবে)</label><input id="pu_newretail" type="number" value="0"></div>
@@ -3531,6 +3546,7 @@ function savePurchase(){
     created = {
       id: genId('P', products), name: t.name,
       category: document.getElementById('pu_newcat').value,
+      brand: (document.getElementById('pu_newbrand')||{}).value || '',
       unit: document.getElementById('pu_newunit').value,
       cost: Math.round(totalCost/qty*100)/100,
       retail: Number(document.getElementById('pu_newretail').value||0),
@@ -3977,6 +3993,24 @@ function renderInventory(){
   const isCur = month===curMonth();
   const rows = d.rows.filter(r => INV_SHOW_HIDDEN || !r[10]);
   const hiddenTotal = d.rows.filter(r => r[10]).length;
+  const pmap = {}; CACHE.products.forEach(p => { pmap[p.id] = p; });
+  const invRows = rows.map(r => { const p = pmap[r[0]] || {}; return {r, cat: p.category || 'ক্যাটাগরি বাছাই হয়নি', brand: p.brand || ''}; })
+    .sort((a,b) => a.cat.localeCompare(b.cat,'bn') || a.brand.localeCompare(b.brand,'bn') || String(a.r[1]).localeCompare(String(b.r[1]),'bn'));
+  let lastInvCat = null;
+  const invHtml = invRows.map(x => { const r = x.r; let h = '';
+    if(x.cat !== lastInvCat){ lastInvCat = x.cat; h += `<tr><td colspan="${canSeeValue?9:8}" style="background:var(--bg);font-weight:700;color:var(--navy);">${esc(x.cat)}</td></tr>`; }
+    return h + `
+          <tr>
+            <td>${esc(r[1])}${r[10] ? ' <span class="badge badge-hidden">লুকানো</span>' : ''}</td>
+            <td>${esc(x.brand) || '<span class="muted-cell">—</span>'}</td>
+            <td class="cell-num">${r[3]} ${esc(r[2])}</td>
+            <td class="cell-num">${r[4]}</td>
+            <td class="cell-num">${r[5]}</td>
+            <td class="cell-num">${r[6]}</td>
+            <td class="cell-num">${r[7]}</td>
+            <td class="cell-num"><b>${r[8]} ${esc(r[2])}</b></td>
+            ${canSeeValue?`<td class="cell-num">${money(r2(r[8]*r[9]))}</td>`:''}
+          </tr>`; }).join('');
   document.getElementById('pageContent').innerHTML = `
     <div class="toolbar"><label style="font-size:13px;font-weight:700;">মাস:</label>
       <select onchange="onViewMonth(this)">${monthOptionsHtml(month, false)}</select></div>
@@ -3999,20 +4033,10 @@ function renderInventory(){
         ${hiddenTotal ? `<label style="display:flex;gap:6px;align-items:center;font-size:13px;"><input type="checkbox" ${INV_SHOW_HIDDEN?'checked':''} onchange="toggleInvHidden(this)"> লুকানো পণ্যও দেখান</label>` : ''}
       </div>
       <div class="table-wrap"><table><thead><tr>
-        <th>পণ্য</th><th>মাসের শুরুর স্টক</th><th>+ক্রয়</th><th>−বিক্রয়</th><th>+রিটার্ন</th><th>±সমন্বয়</th><th>=${isCur?'বর্তমান':'শেষ'} স্টক</th>
+        <th>পণ্য</th><th>ব্র্যান্ড</th><th>মাসের শুরুর স্টক</th><th>+ক্রয়</th><th>−বিক্রয়</th><th>+রিটার্ন</th><th>±সমন্বয়</th><th>=${isCur?'বর্তমান':'শেষ'} স্টক</th>
         ${canSeeValue?'<th>স্টক মূল্য</th>':''}
       </tr></thead><tbody>
-        ${rows.map(r=>`
-          <tr>
-            <td>${esc(r[1])}${r[10] ? ' <span class="badge badge-hidden">লুকানো</span>' : ''}</td>
-            <td class="cell-num">${r[3]} ${esc(r[2])}</td>
-            <td class="cell-num">${r[4]}</td>
-            <td class="cell-num">${r[5]}</td>
-            <td class="cell-num">${r[6]}</td>
-            <td class="cell-num">${r[7]}</td>
-            <td class="cell-num"><b>${r[8]} ${esc(r[2])}</b></td>
-            ${canSeeValue?`<td class="cell-num">${money(r2(r[8]*r[9]))}</td>`:''}
-          </tr>`).join('') || `<tr><td colspan="8" class="empty-state">কোনো পণ্য নেই</td></tr>`}
+        ${invHtml || `<tr><td colspan="9" class="empty-state">কোনো পণ্য নেই</td></tr>`}
       </tbody></table></div>
     </div>
   `;
@@ -4731,6 +4755,18 @@ function renderSettings(){
         </div>
       </div>
       <div class="panel">
+        <h3>পণ্যের ব্র্যান্ড ম্যানেজ করুন</h3>
+        <div style="margin-bottom:10px;">${categoryChips(settings.productBrands||[], 'removeProductBrand').replace('কোনো ক্যাটাগরি নেই','কোনো ব্র্যান্ড নেই')}</div>
+        <div style="display:flex;gap:8px;">
+          <input id="s_new_brand" placeholder="নতুন ব্র্যান্ডের নাম" style="flex:1;padding:9px 11px;border:1px solid var(--border);border-radius:7px;background:var(--bg);">
+          <button class="btn btn-accent btn-sm" onclick="addProductBrand()">+ যোগ করুন</button>
+        </div>
+        ${isAdmin() && !settings.brandMigrated ? `<div class="flash warn" style="margin-top:14px;">
+          <b>একবারের কাজ: ক্যাটাগরি → ব্র্যান্ডে স্থানান্তর</b><br>
+          এখনকার ক্যাটাগরির নামগুলো (যেমন চাতাল মিল, বসুন্ধরা) সব পণ্যে "ব্র্যান্ড" হয়ে যাবে, আর ক্যাটাগরির তালিকা নতুন ১৭টি ক্যাটাগরিতে বদলে যাবে। পণ্যের ক্যাটাগরি খালি থাকবে — আপনি পণ্য সম্পাদনা করে বাছাই করবেন। চাপার আগে স্বয়ংক্রিয়ভাবে ব্যাকআপ ফাইল নামবে।<br>
+          <button class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="migrateCatToBrand()">স্থানান্তর করুন</button></div>` : (settings.brandMigrated ? '<p class="muted-cell" style="margin-top:12px;">✅ ক্যাটাগরি → ব্র্যান্ড স্থানান্তর সম্পন্ন হয়েছে।</p>' : '')}
+      </div>
+      <div class="panel">
         <h3>খরচের ক্যাটাগরি ম্যানেজ করুন</h3>
         <div style="margin-bottom:10px;">${categoryChips(settings.expenseCategories, 'removeExpenseCategory')}</div>
         <div style="display:flex;gap:8px;">
@@ -4800,6 +4836,41 @@ function removeProductCategory(name){
   saveSettings(settings);
   renderSettings();
 }
+function addProductBrand(){
+  const input = document.getElementById('s_new_brand');
+  const name = input.value.trim();
+  if(!name) return;
+  const settings = {...CACHE.settings}, list = settings.productBrands || [];
+  if(list.includes(name)){ alert('এই ব্র্যান্ড আগে থেকেই আছে'); return; }
+  settings.productBrands = [...list, name];
+  saveSettings(settings);
+  renderSettings();
+}
+function removeProductBrand(name){
+  const n = CACHE.products.filter(p => p.brand === name).length;
+  if(!confirm(`\"${name}\" ব্র্যান্ডটি তালিকা থেকে মুছতে চান?` + (n ? `\n\n${n}টি পণ্যে এই ব্র্যান্ড লেখা আছে — পণ্যে লেখা থাকবে, শুধু বাছাইয়ের তালিকা থেকে যাবে।` : ''))) return;
+  const settings = {...CACHE.settings};
+  settings.productBrands = (settings.productBrands || []).filter(b => b !== name);
+  saveSettings(settings);
+  renderSettings();
+}
+const NEW_PRODUCT_CATEGORIES = ["চাউল", "ডাউল", "রান্নার তেল", "লবণ", "চিনি", "আটা", "সুজি", "সস", "চা", "মশলা", "পাস্তা/নুডলস", "দুধ", "হাউজহোল্ড হাইজিন (ঘরবাড়ি পরিষ্কার-পরিচ্ছন্নতা)", "পার্সোনাল হাইজিন (ব্যক্তিগত পরিষ্কার-পরিচ্ছন্নতা)", "হোমকেয়ার/পেস্ট কন্ট্রোল", "বেবি ফুড/বেবি হাইজিন", "অন্যান্য"];
+function migrateCatToBrand(){
+  if(!isAdmin()) return;
+  const st = CACHE.settings;
+  if(st.brandMigrated){ alert('এই স্থানান্তর আগেই হয়ে গেছে।'); return; }
+  const used = {}; CACHE.products.forEach(p => { if(p.category) used[p.category] = (used[p.category]||0) + 1; });
+  const names = Object.keys(used).sort((a,b) => a.localeCompare(b,'bn'));
+  const preview = names.map(n => `• ${n} (${used[n]}টি পণ্য)`).join('\n') || '(কোনো ক্যাটাগরি নেই)';
+  if(!confirm(`স্থানান্তর করবেন?\n\nনিচের নামগুলো ব্র্যান্ড হয়ে যাবে:\n${preview}\n\nসব পণ্যের ক্যাটাগরি খালি হবে (পরে আপনি বাছাই করবেন) এবং ক্যাটাগরির তালিকা নতুন ${NEW_PRODUCT_CATEGORIES.length}টি হবে।\n\nচাপার সাথে সাথে একটি ব্যাকআপ ফাইল নামবে — সেটি সরিয়ে রাখবেন।`)) return;
+  try{ downloadBackup(); }catch(e){ if(!confirm('ব্যাকআপ নামানো যায়নি। তবুও এগিয়ে যাবেন?')) return; }
+  const products = CACHE.products.map(p => ({...p, brand: p.brand ? p.brand : (p.category || ''), category: ''}));
+  if(saveCollection('products', products) === false){ alert('পণ্য সংরক্ষণ হয়নি — কিছু বদলানো হয়নি।'); return; }
+  const brands = [...(st.productBrands||[])]; names.forEach(n => { if(!brands.includes(n)) brands.push(n); });
+  saveSettings({...st, productCategories: NEW_PRODUCT_CATEGORIES.slice(), productBrands: brands, brandMigrated: true});
+  alert(`✅ সম্পন্ন। ${products.length}টি পণ্যের আগের ক্যাটাগরি এখন ব্র্যান্ড। এবার "পণ্য" পেইজে গিয়ে প্রতিটি পণ্যে ক্যাটাগরি বাছাই করুন — যেগুলো বাকি আছে সেগুলোর পাশে "বাছাই করুন" লেখা দেখাবে।`);
+  renderSettings();
+}
 function addExpenseCategory(){
   const input = document.getElementById('s_new_ecat');
   const name = input.value.trim();
@@ -4830,19 +4901,20 @@ function printStockReport(onlyInStock){
   let srcProducts = CACHE.products;
   if(histMonth){
     srcProducts = monthData(histMonth).rows.filter(r=>!r[10]).map(r=>{ const lp = CACHE.products.find(x=>x.id===r[0]) || {};
-      return {id:r[0], name:r[1], unit:r[2], stock:r[8], cost:r[9], retail:lp.retail||0, category:lp.category||'অন্যান্য', hidden:false}; });
+      return {id:r[0], name:r[1], unit:r[2], stock:r[8], cost:r[9], retail:lp.retail||0, category:lp.category||'অন্যান্য', brand:lp.brand||'', hidden:false}; });
   }
   const list = srcProducts.filter(p => !p.hidden && (!onlyInStock || Number(p.stock) > 0))
-    .slice().sort((a,b) => String(a.category).localeCompare(String(b.category),'bn') || String(a.name).localeCompare(String(b.name),'bn'));
+    .map(p => p.category ? p : {...p, category:'ক্যাটাগরি বাছাই হয়নি'})
+    .sort((a,b) => String(a.category).localeCompare(String(b.category),'bn') || String(a.brand||'').localeCompare(String(b.brand||''),'bn') || String(a.name).localeCompare(String(b.name),'bn'));
   if(!list.length){ alert('প্রিন্ট করার মতো কোনো পণ্য নেই।'); return; }
   let body = '', lastCat = null, n = 0, grand = 0, catSum = 0;
-  const flushCat = () => { if(lastCat!==null) body += `<tr class="sp-sub"><td colspan="5" style="text-align:right;">${esc(lastCat||'অন্যান্য')} — উপমোট</td><td class="sp-num">${money(catSum)}</td><td></td><td></td></tr>`; catSum = 0; };
+  const flushCat = () => { if(lastCat!==null) body += `<tr class="sp-sub"><td colspan="6" style="text-align:right;">${esc(lastCat||'অন্যান্য')} — উপমোট</td><td class="sp-num">${money(catSum)}</td><td></td><td></td></tr>`; catSum = 0; };
   list.forEach(p => {
-    if(p.category !== lastCat){ flushCat(); lastCat = p.category; body += `<tr class="sp-cat"><td colspan="8">${esc(p.category||'অন্যান্য')}</td></tr>`; }
+    if(p.category !== lastCat){ flushCat(); lastCat = p.category; body += `<tr class="sp-cat"><td colspan="9">${esc(p.category||'অন্যান্য')}</td></tr>`; }
     n++;
     const value = Math.round(Number(p.stock||0) * priceOf(p) * 100) / 100;
     grand += value; catSum += value;
-    body += `<tr><td>${n}</td><td>${esc(p.name)}</td><td>${esc(p.unit||'কেজি')}</td><td class="sp-num">${money(priceOf(p))}</td><td class="sp-num">${fmtStock(p.stock, p)}</td><td class="sp-num">${money(value)}</td><td class="sp-blank"></td><td class="sp-blank"></td></tr>`;
+    body += `<tr><td>${n}</td><td>${esc(p.name)}</td><td>${esc(p.brand||'')}</td><td>${esc(p.unit||'কেজি')}</td><td class="sp-num">${money(priceOf(p))}</td><td class="sp-num">${fmtStock(p.stock, p)}</td><td class="sp-num">${money(value)}</td><td class="sp-blank"></td><td class="sp-blank"></td></tr>`;
   });
   flushCat();
   const d = new Date();
@@ -4856,9 +4928,9 @@ function printStockReport(onlyInStock){
         <div>${histMonth ? 'মাস শেষের স্টক: '+monthLabel(histMonth) : 'তারিখ: '+dateStr} · ${onlyInStock?'শুধু স্টকে থাকা পণ্য':'সব চালু পণ্য'} · মোট ${list.length}টি পণ্য</div></div>
       </div>
       <table>
-        <thead><tr><th>ক্র.</th><th>পণ্যের নাম</th><th>একক</th><th>${priceLabel}/একক</th><th>স্টক</th><th>মোট টাকা</th><th>ফিজিক্যাল গণনা</th><th>পার্থক্য</th></tr></thead>
+        <thead><tr><th>ক্র.</th><th>পণ্যের নাম</th><th>ব্র্যান্ড</th><th>একক</th><th>${priceLabel}/একক</th><th>স্টক</th><th>মোট টাকা</th><th>ফিজিক্যাল গণনা</th><th>পার্থক্য</th></tr></thead>
         <tbody>${body}</tbody>
-        <tfoot><tr class="sp-total"><td colspan="5" style="text-align:right;">সর্বমোট স্টকের মূল্য (${priceLabel}ে)</td><td class="sp-num">${money(grand)}</td><td colspan="2"></td></tr></tfoot>
+        <tfoot><tr class="sp-total"><td colspan="6" style="text-align:right;">সর্বমোট স্টকের মূল্য (${priceLabel}ে)</td><td class="sp-num">${money(grand)}</td><td colspan="2"></td></tr></tfoot>
       </table>
       <div class="sp-sign"><span>গণনাকারী: ____________</span><span>যাচাইকারী: ____________</span><span>অনুমোদন: ____________</span></div>
     </div>`;
@@ -4926,7 +4998,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৫.১১';
+const APP_VERSION = '৫.১৪';
 const APP_UPDATED_FALLBACK = '2026-10-30T18:00:00+06:00';   // নতুন সংস্করণ বানালে এই তারিখ বদলান (সার্ভার Last-Modified না দিলে এটাই দেখায়, শুধু তারিখ)
 function fmtUpdated(d){
   try{

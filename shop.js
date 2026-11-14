@@ -26,7 +26,24 @@
   /* ---------- পণ্যের হিসাব (একক, দাম, ধাপ) ---------- */
   function byId(id) { return P.filter(function (p) { return p.id === id; })[0]; }
   function lotPrice(p) { return r2(p.lot * p.pr); }                          // একটি "ধাপ"-এর দাম
-  function lineAmt(p, lots) { return r2(lots * p.lot * p.pr); }              // অ্যাডমিন অ্যাপের lineGross-এর একই সূত্র
+  function qtyOf(p, lots) { return r3(lots * p.lot); }                       // বেস এককে পরিমাণ (কেজি ইত্যাদি)
+  function grossOf(p, lots) { return r2(qtyOf(p, lots) * p.pr); }            // অ্যাডমিন অ্যাপের lineGross-এর একই সূত্র
+  function tierPick(p, qty) { var best = null; (p.qd || []).forEach(function (t) { if (qty + 1e-9 >= t.m) best = t; }); return best; }
+  function discOf(p, lots) {                                                  // অ্যাডমিন অ্যাপের পরিমাণ-ছাড় (স্তর) হুবহু
+    var q = qtyOf(p, lots), g = grossOf(p, lots), t = tierPick(p, q); if (!t) return 0;
+    var d = t.t === 'pct' ? Math.round(g * t.v) / 100 : (t.t === 'unit' ? r2(Math.round(t.v * q * 100) / 100) : r2(t.v));
+    return Math.min(g, d);
+  }
+  function lineAmt(p, lots) { return r2(grossOf(p, lots) - discOf(p, lots)); }
+  function tierLabel(t, p) { return r3(t.m) + ' ' + p.u + '+ → ' + (t.t === 'pct' ? t.v + '%' : '৳' + r3(t.v)) + ' ছাড়' + (t.t === 'unit' ? ' (প্রতি ' + p.u + ')' : ''); }
+  function tierText(p) { return (p.qd && p.qd.length) ? '🏷️ ' + p.qd.map(function (t) { return tierLabel(t, p); }).join(' · ') : ''; }
+  function tierHint(p, lots) {
+    if (!p.qd || !p.qd.length) return '';
+    var q = qtyOf(p, lots), cur = tierPick(p, q), nx = null;
+    p.qd.forEach(function (t) { if (!nx && t.m > q + 1e-9) nx = t; });
+    if (nx) return (cur ? 'ছাড় পাচ্ছেন। ' : '') + r3(nx.m - q) + ' ' + p.u + ' আরও নিলে ' + (nx.t === 'pct' ? nx.v + '%' : '৳' + r3(nx.v)) + ' ছাড়' + (nx.t === 'unit' ? ' (প্রতি ' + p.u + ')' : '');
+    return cur ? 'সর্বোচ্চ ছাড় পাচ্ছেন 🎉' : '';
+  }
   function maxLots(p) { return Math.max(0, Math.floor(p.s / p.lot + 1e-9)); }
   function showPrice(p) { return r2(p.pr * (p.b !== 1 ? p.b : 1)); }          // কার্ডে যে দাম দেখায়
   function showPer(p) { return p.b !== 1 ? p.b + ' ' + p.u : (/[0-9০-৯]/.test(p.u) ? p.u : 'প্রতি ' + p.u); }
@@ -82,7 +99,7 @@
     var toks = bnToEn(Q).toLowerCase().trim().split(/\s+/).filter(Boolean);
     var list = P.filter(function (p) {
       if (cat !== 'সব' && p.c !== cat) return false;
-      var hay = bnToEn(p.n + ' ' + (p.c || '') + ' ' + (p.d || '')).toLowerCase();
+      var hay = bnToEn(p.n + ' ' + (p.c || '') + ' ' + (p.br || '') + ' ' + (p.d || '')).toLowerCase();
       return toks.every(function (t) { return hay.indexOf(t) >= 0; });
     });
     if (SORT === 'low') list.sort(function (a, b) { return showPrice(a) - showPrice(b); });
@@ -95,16 +112,22 @@
     $('cats').hidden = cs.length < 3;
     $('cats').innerHTML = cs.map(function (c) { return '<button type="button" data-cat="' + esc(c) + '" class="' + (c === cat ? 'on' : '') + '">' + esc(c) + '</button>'; }).join('');
   }
+  function stepper(p, q) {
+    var val = p.b !== 1 ? q : qtyOf(p, q), unit = p.b !== 1 ? '× ' + p.b + ' ' + p.u : p.u;
+    return '<span class="step"><button type="button" data-d="-1" data-id="' + esc(p.id) + '" aria-label="কমান">−</button>' +
+      '<input class="qin" inputmode="decimal" data-qid="' + esc(p.id) + '" value="' + esc(val) + '" aria-label="পরিমাণ (' + esc(p.n) + ')"><em>' + esc(unit) + '</em>' +
+      '<button type="button" data-d="1" data-id="' + esc(p.id) + '" aria-label="বাড়ান">+</button></span>';
+  }
   function card(p) {
     var q = cart[p.id] || 0, mx = maxLots(p), out = mx < 1, act;
     if (!ordering()) act = '';
     else if (out) act = '<button class="add" disabled>স্টক শেষ</button>';
-    else if (q) act = '<span class="step"><button type="button" data-d="-1" data-id="' + esc(p.id) + '" aria-label="কমান">−</button><b>' + esc(qtyText(p, q)) + '</b><button type="button" data-d="1" data-id="' + esc(p.id) + '" aria-label="বাড়ান">+</button></span>';
+    else if (q) act = stepper(p, q);
     else act = '<button class="add" type="button" data-d="1" data-id="' + esc(p.id) + '">কার্টে যোগ করুন</button>';
     var st = stepText(p);
-    return '<article class="card"><div class="pic">' + (p.c ? '<span class="tag">' + esc(p.c) + '</span>' : '') + (out ? '<span class="tag out">স্টক শেষ</span>' : '') +
+    return '<article class="card"><div class="pic">' + ((p.br || p.c) ? '<span class="tag">' + esc(p.br || p.c) + '</span>' : '') + (out ? '<span class="tag out">স্টক শেষ</span>' : '') +
       '<img src="' + (IMG[p.id] || PLACEHOLDER) + '" alt="' + esc(p.n) + '"' + (p.hi && !IMG[p.id] ? ' data-pid="' + esc(p.id) + '" data-iv="' + esc(p.iv || '') + '"' : '') + ' loading="lazy"></div>' +
-      '<div class="body"><h3>' + esc(p.n) + '</h3>' + (p.d ? '<p>' + esc(p.d) + '</p>' : '') + (st ? '<p>' + esc(st) + '</p>' : '') +
+      '<div class="body"><h3>' + esc(p.n) + '</h3>' + (p.d ? '<p>' + esc(p.d) + '</p>' : '') + (st ? '<p>' + esc(st) + '</p>' : '') + (tierText(p) ? '<p style="color:#0E7448;font-weight:600">' + esc(tierText(p)) + '</p>' : '') +
       '<div class="buy"><span class="price num">' + tk(showPrice(p)) + '<small>' + esc(showPer(p)) + '</small></span>' + act + '</div></div></article>';
   }
   var observer = null;
@@ -135,10 +158,10 @@
   /* ---------- কার্ট ---------- */
   function lines() { return Object.keys(cart).map(function (k) { return { p: byId(k), q: cart[k] }; }).filter(function (l) { return l.p && l.q > 0; }); }
   function sums() {
-    var sub = 0; lines().forEach(function (l) { sub += lineAmt(l.p, l.q); }); sub = r2(sub);
+    var sub = 0, disc = 0; lines().forEach(function (l) { sub += lineAmt(l.p, l.q); disc += discOf(l.p, l.q); }); sub = r2(sub); disc = r2(disc);
     var tbd = !(S.deliveryLocal || S.deliveryOutside);
     var del = tbd ? 0 : ((S.freeDeliveryMin > 0 && sub >= S.freeDeliveryMin) ? 0 : (area === 'outside' ? S.deliveryOutside : S.deliveryLocal));
-    return { sub: sub, del: del, tbd: tbd, total: r2(sub + del) };
+    return { sub: sub, disc: disc, del: del, tbd: tbd, total: r2(sub + del) };
   }
   function cartCount() { return lines().length; }
   function renderCart() {
@@ -150,24 +173,40 @@
     if (!ls.length) { $('lines').innerHTML = '<p style="text-align:center;color:var(--muted);padding:24px 0">কার্ট এখনো খালি। পছন্দের পণ্য যোগ করুন।</p>'; $('checkout').hidden = true; return; }
     $('checkout').hidden = !ordering();
     $('lines').innerHTML = ls.map(function (l) {
-      return '<div class="line"><img src="' + (IMG[l.p.id] || PLACEHOLDER) + '" alt=""><div><b>' + esc(l.p.n) + '</b><small class="num">' + esc(qtyText(l.p, l.q)) + ' = ' + tk(lineAmt(l.p, l.q)) + '</small></div>' +
-        '<span class="step"><button type="button" data-d="-1" data-id="' + esc(l.p.id) + '" aria-label="কমান">−</button><b>' + esc(qtyText(l.p, l.q)) + '</b><button type="button" data-d="1" data-id="' + esc(l.p.id) + '" aria-label="বাড়ান">+</button></span></div>';
+      return '<div class="line"><img src="' + (IMG[l.p.id] || PLACEHOLDER) + '" alt=""><div><b>' + esc(l.p.n) + '</b><small class="num">' + esc(qtyText(l.p, l.q)) + ' = ' + tk(lineAmt(l.p, l.q)) + '</small>' + (discOf(l.p, l.q) ? '<br><small style="color:#0E7448">ছাড় −' + tk(discOf(l.p, l.q)) + ' বাদ দিয়ে</small>' : '') + (tierHint(l.p, l.q) ? '<br><small style="color:#8a5d10">' + esc(tierHint(l.p, l.q)) + '</small>' : '') + '</div>' +
+        stepper(l.p, l.q) + '</div>';
     }).join('');
-    $('sum').innerHTML = '<div><span>পণ্যের দাম</span><span>' + tk(t.sub) + '</span></div><div><span>ডেলিভারি চার্জ</span><span>' + (t.tbd ? 'কনফার্মের সময়' : (t.del ? tk(t.del) : 'ফ্রি')) + '</span></div><div class="t"><span>মোট (ক্যাশ অন ডেলিভারি)</span><span>' + tk(t.total) + '</span></div>';
+    $('sum').innerHTML = (t.disc ? '<div><span>পণ্যের দাম</span><span>' + tk(r2(t.sub + t.disc)) + '</span></div><div style="color:#0E7448"><span>পরিমাণ ছাড়</span><span>−' + tk(t.disc) + '</span></div>' : '<div><span>পণ্যের দাম</span><span>' + tk(t.sub) + '</span></div>') + '<div><span>ডেলিভারি চার্জ</span><span>' + (t.tbd ? 'কনফার্মের সময়' : (t.del ? tk(t.del) : 'ফ্রি')) + '</span></div><div class="t"><span>মোট (ক্যাশ অন ডেলিভারি)</span><span>' + tk(t.total) + '</span></div>';
   }
   function change(id, d) {
     var p = byId(id); if (!p || !ordering()) return;
     var q = (cart[id] || 0) + d, mx = maxLots(p);
     if (q > mx) { toast('স্টকে আছে মাত্র ' + qtyText(p, mx)); q = mx; }
-    if (q <= 0) delete cart[id]; else cart[id] = Math.min(q, 200);
+    if (q <= 0) delete cart[id]; else cart[id] = Math.min(q, 5000);
     saveCart(); renderGrid(); renderCart();
   }
   document.addEventListener('click', function (e) {
     var b = e.target.closest('[data-d]'); if (b) { change(b.getAttribute('data-id'), +b.getAttribute('data-d')); return; }
     var c = e.target.closest('[data-copy]'); if (c) { copy(c.getAttribute('data-copy'), 'কপি হয়েছে'); return; }
+    var tr = e.target.closest('[data-track]'); if (tr) { closeCart(); openTrack(tr.getAttribute('data-track')); return; }
     var k = e.target.closest('[data-cat]'); if (k) { cat = k.getAttribute('data-cat'); renderCats(); renderGrid(); }
   });
-  document.addEventListener('change', function (e) { if (e.target.name === 'area') { area = e.target.value; renderCart(); } });
+  document.addEventListener('change', function (e) {
+    if (e.target.name === 'area') { area = e.target.value; renderCart(); return; }
+    var el = e.target.closest && e.target.closest('.qin'); if (!el) return;          // হাতে লেখা পরিমাণ
+    var id = el.getAttribute('data-qid'), p = byId(id); if (!p) return;
+    var raw = bnToEn(String(el.value).normalize('NFKC')).trim().replace(',', '.'), v = parseFloat(raw);
+    if (raw !== '' && isNaN(v)) { renderGrid(); renderCart(); return; }                 // অক্ষর লিখলে আগের সংখ্যাই থাকবে, কার্ট মুছবে না
+    if (!(v > 0)) delete cart[id];
+    else {
+      var lots = p.b !== 1 ? Math.round(v) : Math.ceil(v / p.lot - 1e-9);          // প্যাকে পূর্ণসংখ্যা; অন্যথায় ধাপে ওপরে মিলিয়ে নেয়
+      lots = Math.max(1, lots);
+      var mx = maxLots(p); if (lots > mx) { toast('স্টকে আছে মাত্র ' + qtyText(p, mx)); lots = mx; }
+      cart[id] = lots;
+    }
+    saveCart(); renderGrid(); renderCart();
+  });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('qin')) { e.preventDefault(); e.target.blur(); } });
   $('q').addEventListener('input', function () { Q = this.value; renderGrid(); });
   $('sort').addEventListener('change', function () { SORT = this.value; renderGrid(); });
   function openCart() {
@@ -206,20 +245,24 @@
     var t = sums(), ls = lines();
     var doc = {
       customerName: $('nm').value.trim(), phone: normPhone($('ph').value), address: $('ad').value.trim(), note: $('nt').value.trim(), area: area,
-      items: ls.map(function (l) { return { pid: l.p.id, name: l.p.n, qty: r3(l.q * l.p.lot), unit: l.p.u, price: l.p.pr, line: lineAmt(l.p, l.q) }; }),
-      subtotal: t.sub, delivery: t.del, deliveryTbd: t.tbd, total: t.total, status: 'new', source: 'shop',
+      items: ls.map(function (l) { return { pid: l.p.id, name: l.p.n, qty: qtyOf(l.p, l.q), unit: l.p.u, price: l.p.pr, disc: discOf(l.p, l.q), line: lineAmt(l.p, l.q) }; }),
+      discount: t.disc, subtotal: t.sub, delivery: t.del, deliveryTbd: t.tbd, total: t.total, status: 'new', source: 'shop',
       createdAt: firebase.firestore.FieldValue.serverTimestamp()
     };
     var id = pendingId || (pendingId = newId()), tries = 0;
     function attempt() {
       tries++;
-      return withTimeout(db.collection('averamart_weborders').doc(id).set(doc), 20000).catch(function (err) {
+      var batch = db.batch();
+      batch.set(db.collection('averamart_weborders').doc(id), doc);
+      batch.set(db.collection('averamart_track').doc(id), { s: 'new', t: firebase.firestore.FieldValue.serverTimestamp() });
+      return withTimeout(batch.commit(), 20000).catch(function (err) {
         if (err && err.code === 'permission-denied' && tries < 4) { id = pendingId = newId(); return attempt(); }   // একই নম্বর আগে থেকে থাকলে নতুন নম্বর
         throw err;
       });
     }
     attempt().then(function () {
-      pendingId = ''; localStorage.setItem('am_last_order', String(Date.now()));
+      pendingId = ''; localStorage.setItem('am_last_order', String(Date.now())); try { localStorage.setItem('am_last_id', id); } catch (e3) {}
+      sendEmail(id, doc, t);
       try { localStorage.setItem('am_cust', JSON.stringify({ n: doc.customerName, p: $('ph').value, a: doc.address })); } catch (e2) {}
       var text = 'আসসালামু আলাইকুম, আমি অর্ডার করেছি।\nঅর্ডার নম্বর: ' + id + '\n' + doc.items.map(function (s, i) { return (i + 1) + '. ' + s.name + ' × ' + s.qty + ' ' + s.unit; }).join('\n') + '\nমোট: ' + tk(t.total) + (t.tbd ? ' (ডেলিভারি চার্জ আলাদা)' : '') + '\nনাম: ' + doc.customerName + '\nমোবাইল: ' + doc.phone;
       cart = {}; saveCart(); renderGrid(); renderCart();
@@ -228,13 +271,58 @@
       $('done').innerHTML = '<h2>অর্ডার হয়েছে ✓</h2><p>ধন্যবাদ, ' + esc(doc.customerName) + '। আমরা শীঘ্রই ফোনে কনফার্ম করব।</p>' +
         '<div class="oid">' + esc(id) + '</div><p class="num">মোট ' + tk(t.total) + (t.tbd ? ' + ডেলিভারি চার্জ' : '') + ' (ক্যাশ অন ডেলিভারি)</p>' +
         '<div class="send">' + (w ? '<a class="btn wa" href="' + esc(w) + '" target="_blank" rel="noopener">WhatsApp-এ অর্ডার নম্বর পাঠান</a>' : '') +
-        '<button class="btn ghost" type="button" data-copy="' + esc(id) + '">অর্ডার নম্বর কপি করুন</button><button class="btn soft" type="button" id="again">আরও কেনাকাটা করুন</button></div>';
+        '<button class="btn ghost" type="button" data-copy="' + esc(id) + '">অর্ডার নম্বর কপি করুন</button><button class="btn ghost" type="button" data-track="' + esc(id) + '">অর্ডারের অবস্থা দেখুন</button><button class="btn soft" type="button" id="again">আরও কেনাকাটা করুন</button></div>';
       $('done').hidden = false; $('again').onclick = closeCart;
     }).catch(function (err) {
       $('err').textContent = (err && err.code === 'timeout') ? 'সার্ভার সাড়া দেয়নি। ইন্টারনেট দেখে আবার চেষ্টা করুন।' : 'অর্ডার পাঠানো যায়নি। কিছুক্ষণ পরে আবার চেষ্টা করুন বা ফোন করুন।';
     }).then(function () { btn.disabled = false; btn.textContent = 'অর্ডার নিশ্চিত করুন (ক্যাশ অন ডেলিভারি)'; });
   });
   try { var cu = JSON.parse(localStorage.getItem('am_cust') || 'null'); if (cu) { $('nm').value = cu.n || ''; $('ph').value = cu.p || ''; $('ad').value = cu.a || ''; } } catch (e) {}
+
+  /* ---------- মালিককে ইমেইল (FormSubmit — ফ্রি, কোনো অ্যাকাউন্ট লাগে না) ---------- */
+  function sendEmail(id, doc, t) {
+    var to = (S.notifyEmail || '').trim(); if (!to) return;
+    var body = {
+      _subject: 'নতুন অর্ডার ' + id + ' — ' + tk(t.total), _template: 'table', _captcha: 'false',
+      'অর্ডার নম্বর': id, 'কাস্টমার': doc.customerName, 'মোবাইল': doc.phone, 'ঠিকানা': doc.address, 'নোট': doc.note || '—',
+      'এলাকা': doc.area === 'outside' ? 'অন্য জেলা' : 'স্থানীয়',
+      'পণ্য': doc.items.map(function (s, i) { return (i + 1) + '. ' + s.name + ' × ' + s.qty + ' ' + s.unit + ' = ' + tk(s.line) + (s.disc ? ' (ছাড় ' + tk(s.disc) + ')' : ''); }).join('\n'),
+      'পণ্যের দাম': tk(t.sub), 'ছাড়': tk(t.disc), 'ডেলিভারি': t.tbd ? 'জানানো হয়নি' : tk(t.del), 'মোট': tk(t.total), 'পেমেন্ট': 'ক্যাশ অন ডেলিভারি'
+    };
+    try {
+      fetch('https://formsubmit.co/ajax/' + encodeURIComponent(to), { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }, body: JSON.stringify(body), keepalive: true }).catch(function () {});
+    } catch (e) {}
+  }
+
+  /* ---------- অর্ডার ট্র্যাকিং ---------- */
+  var STEPS = [['new', 'অর্ডার পেয়েছি', 'আপনার অর্ডার আমাদের কাছে এসেছে, কনফার্মের অপেক্ষায়'], ['confirmed', 'কনফার্ম হয়েছে', 'আমরা অর্ডার গ্রহণ করেছি'], ['packing', 'প্যাকিং হচ্ছে', 'আপনার পণ্য প্যাক করা হচ্ছে'], ['delivered', 'ডেলিভারি সম্পন্ন', 'পণ্য পৌঁছে গেছে। ধন্যবাদ!']];
+  function normId(v) { v = bnToEn(v).toUpperCase().replace(/\s/g, ''); if (/^[A-Z0-9]{6}$/.test(v)) v = 'W-' + v; return v; }
+  function openTrack(id) {
+    $('tveil').hidden = false; $('tres').innerHTML = '';
+    var last = ''; try { last = localStorage.getItem('am_last_id') || ''; } catch (e) {}
+    $('tid').value = id || last || ''; $('tid').focus();
+    if (id) runTrack();
+  }
+  function runTrack() {
+    var id = normId($('tid').value), out = $('tres');
+    if (!/^W-[A-Z0-9]{6}$/.test(id)) { out.innerHTML = '<p class="err">অর্ডার নম্বর সঠিক দিন (যেমন W-AB12CD)।</p>'; return; }
+    out.innerHTML = '<p class="note">খোঁজা হচ্ছে...</p>';
+    db.collection('averamart_track').doc(id).get({ source: 'server' }).then(function (s) {
+      if (!s.exists) { out.innerHTML = '<p class="err">এই নম্বরে কোনো অর্ডার পাওয়া যায়নি। নম্বরটি আবার মিলিয়ে দেখুন।</p>'; return; }
+      var d = s.data(), st = d.s, when = '';
+      try { when = d.t && d.t.toDate ? d.t.toDate().toLocaleString('bn-BD', { dateStyle: 'medium', timeStyle: 'short' }) : ''; } catch (e) {}
+      if (st === 'cancelled') { out.innerHTML = '<h3>অর্ডার ' + esc(id) + '</h3><p class="err" style="min-height:0">এই অর্ডারটি বাতিল হয়েছে। জানতে ফোন করুন।</p>'; return; }
+      var idx = 0; STEPS.forEach(function (x, i) { if (x[0] === st) idx = i; });
+      out.innerHTML = '<h3>অর্ডার ' + esc(id) + '</h3><ol class="tl">' + STEPS.map(function (x, i) {
+        return '<li class="' + (i <= idx ? 'on' : '') + (i === idx ? ' cur' : '') + '"><i>' + (i <= idx ? '✓' : (i + 1)) + '</i><span>' + esc(x[1]) + (i === idx ? '<br><small style="font-weight:400;color:var(--muted)">' + esc(x[2]) + '</small>' : '') + '</span></li>';
+      }).join('') + '</ol>' + (when ? '<p class="note">সর্বশেষ হালনাগাদ: ' + esc(when) + '</p>' : '');
+    }).catch(function () { out.innerHTML = '<p class="err">এখন অবস্থা আনা যায়নি। ইন্টারনেট দেখে আবার চেষ্টা করুন।</p>'; });
+  }
+  $('trackBtn').onclick = function () { openTrack(''); };
+  $('tclose').onclick = function () { $('tveil').hidden = true; };
+  $('tveil').addEventListener('click', function (e) { if (e.target === $('tveil')) $('tveil').hidden = true; });
+  $('tgo').addEventListener('click', runTrack);
+  $('tid').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); runTrack(); } });
 
   /* ---------- লোড ---------- */
   function apply(d) {

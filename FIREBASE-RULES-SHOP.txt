@@ -1,12 +1,9 @@
-অনলাইন দোকানের জন্য নতুন Firebase Rules (সংস্করণ ৫.৮)
-==========================================================
-এটা আপনার আগের Rules-এর সাথে যোগ করতে হবে (বদলে নয়)। Firestore Database → Rules ট্যাবে আগের নিয়মের
-`match /databases/{database}/documents { ... }` ব্লকের ভেতরে, শেষ `}`-এর ঠিক আগে নিচের ৩টি match ব্লক বসিয়ে Publish করুন।
-(আগের নিয়মে hasRole() ফাংশন আছে — সাময়িক ও চূড়ান্ত দুই ধাপেই। না থাকলে নিচের ফাংশনটিও যোগ করুন।)
+অনলাইন দোকানের Firebase Rules (সংস্করণ ৫.১২) — আগের ৩টি দোকান-ব্লক মুছে নিচের ৪টি বসান
+=====================================================================================
+আগে যে ৩টি ব্লক (averamart_public, averamart_public_img, averamart_weborders) বসিয়েছিলেন সেগুলো মুছে ফেলুন,
+তারপর নিচের পুরোটা (৪টি ব্লক) শেষের দুটো `}`-এর ওপরে বসিয়ে Publish করুন। নতুন যোগ: ছাড়ের তথ্য (discount) ও অর্ডার ট্র্যাক (averamart_track)।
 
-    // ---- অনলাইন দোকান (নতুন) ----
-
-    // কাস্টমার-দেখা পণ্য তালিকা ও ছবি: সবাই পড়তে পারে, লিখতে পারে শুধু লগইন করা স্টাফ
+    // ---- অনলাইন দোকান ----
     match /averamart_public/{d} {
       allow read: if true;
       allow write: if hasRole();
@@ -15,10 +12,8 @@
       allow read: if true;
       allow write: if hasRole();
     }
-
-    // ওয়েব অর্ডার: যে কেউ শুধু নতুন অর্ডার "তৈরি" করতে পারে (নির্দিষ্ট ছকে); পড়া/বদলানো শুধু স্টাফ; মোছা যায় না
     match /averamart_weborders/{id} {
-      allow create: if request.resource.data.keys().hasOnly(['customerName','phone','address','note','area','items','subtotal','delivery','deliveryTbd','total','status','source','createdAt'])
+      allow create: if request.resource.data.keys().hasOnly(['customerName','phone','address','note','area','items','discount','subtotal','delivery','deliveryTbd','total','status','source','createdAt'])
         && request.resource.data.keys().hasAll(['customerName','phone','address','items','total','status','createdAt'])
         && request.resource.data.customerName is string && request.resource.data.customerName.size() > 0 && request.resource.data.customerName.size() <= 80
         && request.resource.data.phone is string && request.resource.data.phone.matches('^01[0-9]{9}$')
@@ -34,10 +29,17 @@
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','orderId','handledBy','handledAt']);
       allow delete: if false;
     }
+    // অর্ডার ট্র্যাকিং: শুধু অবস্থা। কাস্টমার নম্বর জানলে একটি একটি করে দেখতে পারে (তালিকা দেখা যায় না)
+    match /averamart_track/{id} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if (request.resource.data.keys().hasOnly(['s','t'])
+          && request.resource.data.s == 'new'
+          && request.resource.data.t == request.time
+          && existsAfter(/databases/$(database)/documents/averamart_weborders/$(id)))
+        || hasRole();
+      allow update: if hasRole();
+      allow delete: if false;
+    }
 
-জরুরি জেনে রাখুন
-  • এই ব্লক ছাড়া দোকান পেইজে পণ্য দেখাবে না ও অর্ডার যাবে না; অ্যাডমিন অ্যাপে "সিঙ্ক হয়নি" লেখা আসবে।
-  • দোকান পেইজ লগইন ছাড়া চলে, তাই কেউ অর্ডার-ছক মেনে ভুয়া অর্ডার পাঠাতে পারে। ফোনে কনফার্ম করে "গ্রহণ করুন" চাপার নিয়মই এর প্রধান সুরক্ষা।
-    ভুয়া অর্ডার বেশি এলে Firebase Console → App Check চালু করুন (reCAPTCHA)।
-  • কাস্টমারের নাম/ফোন/ঠিকানা averamart_weborders-এ থাকে; পড়তে পারে শুধু আপনার স্টাফ।
-  • পণ্যের ক্রয়মূল্য ও লাভ কখনো averamart_public-এ যায় না।
+জরুরি: ট্র্যাক ব্লক না বসালে কাস্টমারের অর্ডারই যাবে না (কারণ অর্ডারের সাথে ট্র্যাক ডকও একসাথে লেখা হয়)। তাই Rules বসানোর আগে নতুন ফাইল আপলোড করবেন না।
