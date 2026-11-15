@@ -4386,11 +4386,7 @@ function renderInvoice(preId){
   if(sel) drawInvoice();
 }
 function editInvoice(id){ openOrderForm(id, 'invoice'); }
-function drawInvoice(){
-  const id = document.getElementById('inv_order').value;
-  const holder = document.getElementById('invoiceHolder');
-  if(!id){ holder.innerHTML=''; return; }
-  const o = CACHE.orders.find(x=>x.id===id);
+function invoiceBoxHtml(o){
   const items = orderItems(o);
   const itemRows = items.map(it=>{
     const p = CACHE.products.find(x=>x.id===it.productId);
@@ -4400,7 +4396,7 @@ function drawInvoice(){
     </tr>`;
   }).join('');
 
-  const invHtml = `
+  return `
     <div class="invoice-box" id="invoiceBox">
       <div class="invoice-head">
         <img src="logo.jpg" alt="logo">
@@ -4431,7 +4427,14 @@ function drawInvoice(){
         <div><span class="sign-line"></span>ক্রেতার স্বাক্ষর</div>
         <div><span class="sign-line"></span>বিক্রেতার স্বাক্ষর</div>
       </div>
-    </div>
+    </div>`;
+}
+function drawInvoice(){
+  const id = document.getElementById('inv_order').value;
+  const holder = document.getElementById('invoiceHolder');
+  if(!id){ holder.innerHTML=''; return; }
+  const o = CACHE.orders.find(x=>x.id===id);
+  const invHtml = invoiceBoxHtml(o) + `
     <div class="invoice-actions">
       ${isAdmin() ? `<button class="btn btn-primary btn-sm" onclick="editInvoice('${o.id}')">✏️ ইনভয়েস সংশোধন করুন</button>` : ''}
       <button class="btn btn-outline btn-sm" onclick="printInvoice(false)">🖨️ সাধারণ প্রিন্ট</button>
@@ -4998,7 +5001,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৫.১৪';
+const APP_VERSION = '৫.১৫';
 const APP_UPDATED_FALLBACK = '2026-10-30T18:00:00+06:00';   // নতুন সংস্করণ বানালে এই তারিখ বদলান (সার্ভার Last-Modified না দিলে এটাই দেখায়, শুধু তারিখ)
 function fmtUpdated(d){
   try{
