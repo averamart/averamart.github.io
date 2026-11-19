@@ -4454,6 +4454,7 @@ function printWhenReady(){
   Promise.race([Promise.all([...waits, fontsReady]), new Promise(r => setTimeout(r, 3000))]).then(() => window.print());
 }
 function printInvoice(thermal){
+  setPrintLandscape(false);
   const box = document.getElementById('invoiceBox').outerHTML;
   document.getElementById('printArea').innerHTML = box;
   document.body.classList.toggle('thermal', !!thermal);
@@ -4896,48 +4897,58 @@ function removeExpenseCategory(name){
 /* ============================================================
    STOCK REPORT PRINT (for physical month-end stock counting)
    ============================================================ */
+function setPrintLandscape(on){
+  const old = document.getElementById('spPage'); if(old) old.remove();
+  if(!on) return;
+  const st = document.createElement('style'); st.id = 'spPage'; st.textContent = '@page{size:A4 landscape;margin:8mm;}';
+  document.head.appendChild(st);
+  const rm = () => { const e = document.getElementById('spPage'); if(e) e.remove(); };
+  window.addEventListener('afterprint', rm, {once:true});
+  setTimeout(rm, 300000);
+}
 function printStockReport(onlyInStock){
   const isAdmin = getSession().role==='admin';
-  const priceOf = p => Number(isAdmin ? p.cost : p.retail) || 0;   // manager never sees cost price
-  const priceLabel = isAdmin ? 'ক্রয়মূল্য' : 'বিক্রয়মূল্য';
-  const histMonth = (currentPage==='inventory' && VIEW_MONTH!==curMonth()) ? VIEW_MONTH : null;
-  let srcProducts = CACHE.products;
-  if(histMonth){
-    srcProducts = monthData(histMonth).rows.filter(r=>!r[10]).map(r=>{ const lp = CACHE.products.find(x=>x.id===r[0]) || {};
-      return {id:r[0], name:r[1], unit:r[2], stock:r[8], cost:r[9], retail:lp.retail||0, category:lp.category||'অন্যান্য', brand:lp.brand||'', hidden:false}; });
-  }
-  const list = srcProducts.filter(p => !p.hidden && (!onlyInStock || Number(p.stock) > 0))
-    .map(p => p.category ? p : {...p, category:'ক্যাটাগরি বাছাই হয়নি'})
-    .sort((a,b) => String(a.category).localeCompare(String(b.category),'bn') || String(a.brand||'').localeCompare(String(b.brand||''),'bn') || String(a.name).localeCompare(String(b.name),'bn'));
+  const priceLabel = isAdmin ? 'ক্রয়মূল্য' : 'বিক্রয়মূল্য';           // ম্যানেজার কখনো ক্রয়মূল্য দেখে না
+  const m = (currentPage==='inventory' && typeof VIEW_MONTH!=='undefined' && VIEW_MONTH) ? VIEW_MONTH : curMonth();
+  const pmap = {}; CACHE.products.forEach(p => { pmap[p.id] = p; });
+  // পর্দার "মাসিক ইনভেন্টরি" টেবিলের হুবহু একই সংখ্যা: শুরুর স্টক, +ক্রয়, −বিক্রয়, +রিটার্ন, ±সমন্বয়, =শেষ স্টক
+  const list = monthData(m).rows.filter(r => !r[10]).map(r => { const p = pmap[r[0]] || {};
+      return {name:r[1], unit:r[2], open:r[3], P:r[4], S:r[5], R:r[6], A:r[7], stock:r[8], price:Number(isAdmin ? r[9] : p.retail) || 0, category:p.category || 'ক্যাটাগরি বাছাই হয়নি', brand:p.brand || ''}; })
+    .filter(x => !onlyInStock || Number(x.stock) > 0)
+    .sort((a,b) => String(a.category).localeCompare(String(b.category),'bn') || String(a.brand).localeCompare(String(b.brand),'bn') || String(a.name).localeCompare(String(b.name),'bn'));
   if(!list.length){ alert('প্রিন্ট করার মতো কোনো পণ্য নেই।'); return; }
+  const COLS = 13;
   let body = '', lastCat = null, n = 0, grand = 0, catSum = 0;
-  const flushCat = () => { if(lastCat!==null) body += `<tr class="sp-sub"><td colspan="6" style="text-align:right;">${esc(lastCat||'অন্যান্য')} — উপমোট</td><td class="sp-num">${money(catSum)}</td><td></td><td></td></tr>`; catSum = 0; };
-  list.forEach(p => {
-    if(p.category !== lastCat){ flushCat(); lastCat = p.category; body += `<tr class="sp-cat"><td colspan="9">${esc(p.category||'অন্যান্য')}</td></tr>`; }
+  const flushCat = () => { if(lastCat!==null) body += `<tr class="sp-sub"><td colspan="10" style="text-align:right;">${esc(lastCat)} — উপমোট</td><td class="sp-num">${money(catSum)}</td><td></td><td></td></tr>`; catSum = 0; };
+  list.forEach(x => {
+    if(x.category !== lastCat){ flushCat(); lastCat = x.category; body += `<tr class="sp-cat"><td colspan="${COLS}">${esc(x.category)}</td></tr>`; }
     n++;
-    const value = Math.round(Number(p.stock||0) * priceOf(p) * 100) / 100;
+    const value = Math.round(Number(x.stock||0) * x.price * 100) / 100;
     grand += value; catSum += value;
-    body += `<tr><td>${n}</td><td>${esc(p.name)}</td><td>${esc(p.brand||'')}</td><td>${esc(p.unit||'কেজি')}</td><td class="sp-num">${money(priceOf(p))}</td><td class="sp-num">${fmtStock(p.stock, p)}</td><td class="sp-num">${money(value)}</td><td class="sp-blank"></td><td class="sp-blank"></td></tr>`;
+    body += `<tr><td>${n}</td><td>${esc(x.name)}</td><td>${esc(x.brand)}</td>
+      <td class="sp-num">${x.open} ${esc(x.unit)}</td><td class="sp-num">${x.P}</td><td class="sp-num">${x.S}</td><td class="sp-num">${x.R}</td><td class="sp-num">${x.A}</td>
+      <td class="sp-num"><b>${x.stock} ${esc(x.unit)}</b></td><td class="sp-num">${money(x.price)}</td><td class="sp-num">${money(value)}</td><td class="sp-blank"></td><td class="sp-blank"></td></tr>`;
   });
   flushCat();
   const d = new Date();
   const dateStr = `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
   document.getElementById('printArea').innerHTML = `
-    <div class="stock-print">
+    <div class="stock-print wide">
       <div class="sp-head">
         <img src="logo.jpg" alt="">
-        <div><h3>Avera Mart — স্টক রিপোর্ট</h3>
+        <div><h3>Avera Mart — মাসিক স্টক রিপোর্ট</h3>
         <div>${esc(CACHE.settings.businessAddress||'')}</div>
-        <div>${histMonth ? 'মাস শেষের স্টক: '+monthLabel(histMonth) : 'তারিখ: '+dateStr} · ${onlyInStock?'শুধু স্টকে থাকা পণ্য':'সব চালু পণ্য'} · মোট ${list.length}টি পণ্য</div></div>
+        <div>মাস: <b>${esc(monthLabel(m))}</b> (${esc(monthRangeText(m))}) · ${onlyInStock?'শুধু স্টকে থাকা পণ্য':'সব চালু পণ্য'} · মোট ${list.length}টি পণ্য · প্রিন্ট: ${dateStr}</div></div>
       </div>
       <table>
-        <thead><tr><th>ক্র.</th><th>পণ্যের নাম</th><th>ব্র্যান্ড</th><th>একক</th><th>${priceLabel}/একক</th><th>স্টক</th><th>মোট টাকা</th><th>ফিজিক্যাল গণনা</th><th>পার্থক্য</th></tr></thead>
+        <thead><tr><th>ক্র.</th><th>পণ্যের নাম</th><th>ব্র্যান্ড</th><th>মাসের শুরুর স্টক</th><th>+ক্রয়</th><th>−বিক্রয়</th><th>+রিটার্ন</th><th>±সমন্বয়</th><th>=শেষ স্টক</th><th>${priceLabel}/একক</th><th>স্টক মূল্য</th><th>ফিজিক্যাল গণনা</th><th>পার্থক্য</th></tr></thead>
         <tbody>${body}</tbody>
-        <tfoot><tr class="sp-total"><td colspan="6" style="text-align:right;">সর্বমোট স্টকের মূল্য (${priceLabel}ে)</td><td class="sp-num">${money(grand)}</td><td colspan="2"></td></tr></tfoot>
+        <tfoot><tr class="sp-total"><td colspan="10" style="text-align:right;">সর্বমোট শেষ স্টকের মূল্য (${priceLabel}ে)</td><td class="sp-num">${money(grand)}</td><td colspan="2"></td></tr></tfoot>
       </table>
       <div class="sp-sign"><span>গণনাকারী: ____________</span><span>যাচাইকারী: ____________</span><span>অনুমোদন: ____________</span></div>
     </div>`;
   document.body.classList.remove('thermal');
+  setPrintLandscape(true);
   printWhenReady();
 }
 
@@ -5001,7 +5012,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৫.১৫';
+const APP_VERSION = '৫.১৬';
 const APP_UPDATED_FALLBACK = '2026-10-30T18:00:00+06:00';   // নতুন সংস্করণ বানালে এই তারিখ বদলান (সার্ভার Last-Modified না দিলে এটাই দেখায়, শুধু তারিখ)
 function fmtUpdated(d){
   try{
