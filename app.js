@@ -4001,7 +4001,7 @@ function renderInventory(){
     if(x.cat !== lastInvCat){ lastInvCat = x.cat; h += `<tr><td colspan="${canSeeValue?9:8}" style="background:var(--bg);font-weight:700;color:var(--navy);">${esc(x.cat)}</td></tr>`; }
     return h + `
           <tr>
-            <td>${esc(r[1])}${r[10] ? ' <span class="badge badge-hidden">লুকানো</span>' : ''}</td>
+            <td>${esc(r[1])}${r[10] ? ' <span class="badge badge-hidden">লুকানো</span>' : ''}<br><span class="muted-cell" style="font-size:11.5px;">${esc(r[0])}</span></td>
             <td>${esc(x.brand) || '<span class="muted-cell">—</span>'}</td>
             <td class="cell-num">${r[3]} ${esc(r[2])}</td>
             <td class="cell-num">${r[4]}</td>
@@ -4913,19 +4913,19 @@ function printStockReport(onlyInStock){
   const pmap = {}; CACHE.products.forEach(p => { pmap[p.id] = p; });
   // পর্দার "মাসিক ইনভেন্টরি" টেবিলের হুবহু একই সংখ্যা: শুরুর স্টক, +ক্রয়, −বিক্রয়, +রিটার্ন, ±সমন্বয়, =শেষ স্টক
   const list = monthData(m).rows.filter(r => !r[10]).map(r => { const p = pmap[r[0]] || {};
-      return {name:r[1], unit:r[2], open:r[3], P:r[4], S:r[5], R:r[6], A:r[7], stock:r[8], price:Number(isAdmin ? r[9] : p.retail) || 0, category:p.category || 'ক্যাটাগরি বাছাই হয়নি', brand:p.brand || ''}; })
+      return {id:r[0], name:r[1], unit:r[2], open:r[3], P:r[4], S:r[5], R:r[6], A:r[7], stock:r[8], price:Number(isAdmin ? r[9] : p.retail) || 0, category:p.category || 'ক্যাটাগরি বাছাই হয়নি', brand:p.brand || ''}; })
     .filter(x => !onlyInStock || Number(x.stock) > 0)
     .sort((a,b) => String(a.category).localeCompare(String(b.category),'bn') || String(a.brand).localeCompare(String(b.brand),'bn') || String(a.name).localeCompare(String(b.name),'bn'));
   if(!list.length){ alert('প্রিন্ট করার মতো কোনো পণ্য নেই।'); return; }
-  const COLS = 13;
+  const COLS = 14;
   let body = '', lastCat = null, n = 0, grand = 0, catSum = 0;
-  const flushCat = () => { if(lastCat!==null) body += `<tr class="sp-sub"><td colspan="10" style="text-align:right;">${esc(lastCat)} — উপমোট</td><td class="sp-num">${money(catSum)}</td><td></td><td></td></tr>`; catSum = 0; };
+  const flushCat = () => { if(lastCat!==null) body += `<tr class="sp-sub"><td colspan="11" style="text-align:right;">${esc(lastCat)} — উপমোট</td><td class="sp-num">${money(catSum)}</td><td></td><td></td></tr>`; catSum = 0; };
   list.forEach(x => {
     if(x.category !== lastCat){ flushCat(); lastCat = x.category; body += `<tr class="sp-cat"><td colspan="${COLS}">${esc(x.category)}</td></tr>`; }
     n++;
     const value = Math.round(Number(x.stock||0) * x.price * 100) / 100;
     grand += value; catSum += value;
-    body += `<tr><td>${n}</td><td>${esc(x.name)}</td><td>${esc(x.brand)}</td>
+    body += `<tr><td>${n}</td><td>${esc(x.id)}</td><td>${esc(x.name)}</td><td>${esc(x.brand)}</td>
       <td class="sp-num">${x.open} ${esc(x.unit)}</td><td class="sp-num">${x.P}</td><td class="sp-num">${x.S}</td><td class="sp-num">${x.R}</td><td class="sp-num">${x.A}</td>
       <td class="sp-num"><b>${x.stock} ${esc(x.unit)}</b></td><td class="sp-num">${money(x.price)}</td><td class="sp-num">${money(value)}</td><td class="sp-blank"></td><td class="sp-blank"></td></tr>`;
   });
@@ -4941,9 +4941,9 @@ function printStockReport(onlyInStock){
         <div>মাস: <b>${esc(monthLabel(m))}</b> (${esc(monthRangeText(m))}) · ${onlyInStock?'শুধু স্টকে থাকা পণ্য':'সব চালু পণ্য'} · মোট ${list.length}টি পণ্য · প্রিন্ট: ${dateStr}</div></div>
       </div>
       <table>
-        <thead><tr><th>ক্র.</th><th>পণ্যের নাম</th><th>ব্র্যান্ড</th><th>মাসের শুরুর স্টক</th><th>+ক্রয়</th><th>−বিক্রয়</th><th>+রিটার্ন</th><th>±সমন্বয়</th><th>=শেষ স্টক</th><th>${priceLabel}/একক</th><th>স্টক মূল্য</th><th>ফিজিক্যাল গণনা</th><th>পার্থক্য</th></tr></thead>
+        <thead><tr><th>ক্র.</th><th>আইডি</th><th>পণ্যের নাম</th><th>ব্র্যান্ড</th><th>মাসের শুরুর স্টক</th><th>+ক্রয়</th><th>−বিক্রয়</th><th>+রিটার্ন</th><th>±সমন্বয়</th><th>=শেষ স্টক</th><th>${priceLabel}/একক</th><th>স্টক মূল্য</th><th>ফিজিক্যাল গণনা</th><th>পার্থক্য</th></tr></thead>
         <tbody>${body}</tbody>
-        <tfoot><tr class="sp-total"><td colspan="10" style="text-align:right;">সর্বমোট শেষ স্টকের মূল্য (${priceLabel}ে)</td><td class="sp-num">${money(grand)}</td><td colspan="2"></td></tr></tfoot>
+        <tfoot><tr class="sp-total"><td colspan="11" style="text-align:right;">সর্বমোট শেষ স্টকের মূল্য (${priceLabel}ে)</td><td class="sp-num">${money(grand)}</td><td colspan="2"></td></tr></tfoot>
       </table>
       <div class="sp-sign"><span>গণনাকারী: ____________</span><span>যাচাইকারী: ____________</span><span>অনুমোদন: ____________</span></div>
     </div>`;
@@ -5012,7 +5012,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৫.১৬';
+const APP_VERSION = '৫.১৭';
 const APP_UPDATED_FALLBACK = '2026-10-30T18:00:00+06:00';   // নতুন সংস্করণ বানালে এই তারিখ বদলান (সার্ভার Last-Modified না দিলে এটাই দেখায়, শুধু তারিখ)
 function fmtUpdated(d){
   try{

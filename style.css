@@ -213,9 +213,10 @@ tr:hover td{background:#FAFAF5;}
 
 .print-area{display:none;}
 @media print{
-  body *{visibility:hidden;}
-  .print-area, .print-area *{visibility:visible;}
-  .print-area{display:block;position:absolute;top:0;left:0;width:100%;}
+  /* বাকি পেইজ পুরো সরানো (visibility নয়) — নইলে অ্যাপ-পেইজের উচ্চতার সমান ফাঁকা পাতা শেষে যোগ হয় */
+  body > *:not(.print-area){display:none !important;}
+  .print-area{display:block;position:static;width:100%;}
+  body{background:#fff !important;margin:0;padding:0;}
 }
 .thermal .invoice-box{max-width:280px;padding:14px;font-size:12px;}
 .thermal .invoice-head img{width:40px;height:40px;}
