@@ -70,7 +70,8 @@ function figures(from, to){
     openVal += (stock - fromOn) * cost; closeVal += (stock - after) * cost;
     initVal += I * cost;
     const man = r3(A - I); adjVal += man * cost;
-    if(man){ n++; adjRows.push({id:p.id, name:p.name, brand:p.brand || '', unit:p.unit || 'কেজি', q:man, cost, value:r2(man * cost)}); }
+    const entries = (p.adj || []).filter(a => a.n !== 'প্রারম্ভিক স্টক' && inR(a.d) && Number(a.q)).map(a => ({d:d10(a.d), q:r3(a.q), n:String(a.n || '')}));
+    if(man){ n++; adjRows.push({id:p.id, name:p.name, brand:p.brand || '', unit:p.unit || 'কেজি', q:man, cost, value:r2(man * cost), entries}); }
   });
   const periodicCogs = openVal + purchases + initVal - closeVal;
   const custDueNew = sum(CACHE.orders.filter(o => o.status !== 'Cancelled' && inR(o.date)), o => orderDue(o));
@@ -83,6 +84,10 @@ function figures(from, to){
     netStock, adjVal:r2(adjVal), adjRows, adjCount:n, custDueNew:r2(custDueNew), supDueNew:r2(supDueNew), orders:ords.length};
 }
 
+function srcOf(a){      // অ্যাপে শুধু "স্টক যাচাই → মেলান" বাটন কারণ/নোট জমা রাখে; পণ্য সম্পাদনা ও এক্সেল আপলোডে নোট থাকে না
+  if(a.n) return a.n === 'সমন্বয় (পার্থক্য মেলানো)' ? '"স্টক মূল্য যাচাই" পেইজের "মেলান" বাটন (কারণ লেখা হয়নি)' : '"স্টক মূল্য যাচাই" পেইজের "মেলান" বাটন — কারণ: ' + a.n;
+  return 'পণ্য সম্পাদনায় স্টক ঘরের সংখ্যা বদল, অথবা এক্সেল আপলোডে স্টক আপডেট';
+}
 function dateBn(d){ const p = String(d).split('-'); return p.length === 3 ? `${p[2]}/${p[1]}/${p[0]}` : d; }
 const row = (label, val, opts = {}) => `<tr${opts.b ? ' style="font-weight:700;"' : ''}><td>${label}</td><td class="cell-num">${opts.raw ? val : money(val)}</td></tr>`;
 
@@ -108,9 +113,9 @@ function statementHtml(f){
     ${row('− মোট পরিচালন খরচ', f.expenses)}
     ${row('নিট প্রফিট (স্টক-ভিত্তিক, ঘাটতিসহ)', f.netStock, {b:1})}
   </table>`;
-  const adj = f.adjRows.length ? `<table><thead><tr><th>পণ্য</th><th>ব্র্যান্ড</th><th>সমন্বয় (ঘাটতি −, বাড়তি +)</th><th>ক্রয়মূল্য/একক</th><th>মূল্য</th></tr></thead><tbody>${
-      f.adjRows.map(r => `<tr><td>${esc(r.name)}<br><span class="muted-cell" style="font-size:11px;">${esc(r.id)}</span></td><td>${esc(r.brand)}</td><td class="cell-num">${r.q} ${esc(r.unit)}</td><td class="cell-num">${money(r.cost)}</td><td class="cell-num" style="color:${r.value < 0 ? '#C0392B' : '#1E9E6C'};font-weight:700;">${money(r.value)}</td></tr>`).join('')
-    }<tr style="font-weight:700;"><td colspan="4" style="text-align:right;">মোট সমন্বয়ের মূল্য</td><td class="cell-num">${money(f.adjVal)}</td></tr></tbody></table>`
+  const adj = f.adjRows.length ? `<table><thead><tr><th>পণ্য</th><th>ব্র্যান্ড</th><th>সমন্বয় (ঘাটতি −, বাড়তি +)</th><th>কবে ও কীভাবে হয়েছে</th><th>ক্রয়মূল্য/একক</th><th>মূল্য</th></tr></thead><tbody>${
+      f.adjRows.map(r => `<tr><td>${esc(r.name)}<br><span class="muted-cell" style="font-size:11px;">${esc(r.id)}</span></td><td>${esc(r.brand)}</td><td class="cell-num">${r.q} ${esc(r.unit)}</td><td style="font-size:12px;">${r.entries.map(a => `<b>${dateBn(a.d)}</b>: ${a.q > 0 ? '+' : ''}${a.q} ${esc(r.unit)}<br>${esc(srcOf(a))}`).join('<hr style="margin:4px 0;border:0;border-top:1px solid #ddd;">')}</td><td class="cell-num">${money(r.cost)}</td><td class="cell-num" style="color:${r.value < 0 ? '#C0392B' : '#1E9E6C'};font-weight:700;">${money(r.value)}</td></tr>`).join('')
+    }<tr style="font-weight:700;"><td colspan="5" style="text-align:right;">মোট সমন্বয়ের মূল্য</td><td class="cell-num">${money(f.adjVal)}</td></tr></tbody></table>`
     : '<p class="muted-cell">এই সময়ে হাতে করা কোনো স্টক সমন্বয় নেই।</p>';
   return {A, B, adj, diff};
 }
