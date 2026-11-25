@@ -183,7 +183,7 @@ function onCloudUpdate(){
       dashboard: renderDashboard, products: renderProducts, orders: renderOrders,
       purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck, leaflet: renderLeaflet, catalog: renderCatalog, productsales: renderProductSales,
       invoice: renderInvoice, settings: renderSettings,
-      weborders: () => renderWebOrders(), webshop: () => renderWebShop()
+      weborders: () => renderWebOrders(), webshop: () => renderWebShop(), plrange: () => renderPlRange()
     };
     (renderers[currentPage] || renderDashboard)();
   }
@@ -621,7 +621,7 @@ function go(page){
     dashboard: renderDashboard, products: renderProducts, orders: renderOrders,
     purchases: renderPurchases, expenses: renderExpenses, dues: renderDues, returns: renderReturns, discounts: renderDiscounts, inventory: renderInventory, shareholders: renderShareholders, profitloss: renderProfitLoss, closing: renderClosing, stockcheck: renderStockCheck, leaflet: renderLeaflet, catalog: renderCatalog, productsales: renderProductSales,
     invoice: renderInvoice, settings: renderSettings,
-      weborders: () => renderWebOrders(), webshop: () => renderWebShop()
+      weborders: () => renderWebOrders(), webshop: () => renderWebShop(), plrange: () => renderPlRange()
   };
   (renderers[page] || renderDashboard)();
 }
@@ -5012,7 +5012,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৫.১৭';
+const APP_VERSION = '৫.১৮';
 const APP_UPDATED_FALLBACK = '2026-10-30T18:00:00+06:00';   // নতুন সংস্করণ বানালে এই তারিখ বদলান (সার্ভার Last-Modified না দিলে এটাই দেখায়, শুধু তারিখ)
 function fmtUpdated(d){
   try{
