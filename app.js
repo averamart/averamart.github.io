@@ -5012,7 +5012,7 @@ document.addEventListener('DOMContentLoaded', () => {
 /* ============================================================
    APP VERSION / LAST UPDATED
    ============================================================ */
-const APP_VERSION = '৫.১৯';
+const APP_VERSION = '৫.২০';
 const APP_UPDATED_FALLBACK = '2026-10-30T18:00:00+06:00';   // নতুন সংস্করণ বানালে এই তারিখ বদলান (সার্ভার Last-Modified না দিলে এটাই দেখায়, শুধু তারিখ)
 function fmtUpdated(d){
   try{
